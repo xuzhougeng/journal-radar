@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}Entries - Journal Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Recent Entries</h1>
+    <div class="page-actions">
+        {% if include_news %}
+            {% if subscription_id %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Hide news</a>
+            {% else %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size) }}">Hide news</a>
+            {% endif %}
+        {% else %}
+            {% if subscription_id %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Show news</a>
+            {% else %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size) }}">Show news</a>
+            {% endif %}
+        {% endif %}
+        <form method="get" action="/entries" class="sort-form">
+            <label for="subscription_id" class="sort-label">Journal</label>
+            <select id="subscription_id" name="subscription_id" class="sort-select" onchange="this.form.submit()">
+                <option value="">All journals</option>
+                {% for subscription in subscriptions %}
+                    <option value="{{ subscription.id }}" {% if subscription_id == subscription.id %}selected{% endif %}>
+                        {{ subscription.name }}
+                    </option>
+                {% endfor %}
+            </select>
+            <label for="sort" class="sort-label">Sort</label>
+            <select id="sort" name="sort" class="sort-select" onchange="this.form.submit()">
+                <option value="fetched" {% if sort == 'fetched' %}selected{% endif %}>By fetched time</option>
+                <option value="published" {% if sort == 'published' %}selected{% endif %}>By published time</option>
+                <option value="journal" {% if sort == 'journal' %}selected{% endif %}>By journal</option>
+            </select>
+            <input type="hidden" name="page" value="1" />
+            <input type="hidden" name="page_size" value="{{ page_size or 10 }}" />
+            <input type="hidden" name="include_news" value="{{ 1 if include_news else 0 }}" />
+            <noscript><button type="submit">Apply</button></noscript>
+        </form>
+    </div>
+</div>
+
+{% if entries %}
+<div class="entries-list">
+    {% for entry in entries %}
+    <div class="entry-card">
+        <div class="entry-header">
+            <a href="{{ entry.link }}" target="_blank" class="entry-title">{{ entry.title }}</a>
+            {% if entry.notified %}
+                <span class="badge badge-notified">Notified</span>
+            {% endif %}
+        </div>
+        <div class="entry-meta">
+            <span class="entry-journal">
+                {% if entry.subscription and entry.subscription.name %}
+                    {{ entry.subscription.name }}
+                {% elif entry.journal_name %}
+                    {{ entry.journal_name }}
+                {% else %}
+                    Unknown journal
+                {% endif %}
+            </span>
+            {% if entry.doi %}
+                <span class="entry-doi">DOI: {{ entry.doi }}</span>
+            {% endif %}
+            {% if entry.authors %}
+                <span class="entry-authors">{{ entry.authors[:100] }}{% if entry.authors|length > 100 %}...{% endif %}</span>
+            {% endif %}
+        </div>
+        <div class="entry-footer">
+            {% if entry.published_at %}
+                <span class="entry-date {% if today_date and entry.published_at.date() == today_date %}entry-date-today{% endif %}">
+                    Published: {{ entry.published_at.strftime('%Y-%m-%d') }}
+                </span>
+            {% endif %}
+            <span class="entry-fetched">Fetched: {{ entry.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            {% if exa_configured and logged_in %}
+                {% if entry.content %}
+                    <span class="badge badge-exa" title="Exa content: {{ entry.content.text|length if entry.content.text else 0 }} chars">Exa ✓</span>
+                    <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }})" title="Preview Exa content">Preview</button>
+                {% else %}
+                    <button class="btn btn-xs btn-exa" onclick="fetchExa({{ entry.id }}, this)" title="Fetch content via Exa AI">Exa</button>
+                    <button class="btn btn-xs btn-preview" disabled title="Fetch Exa content first to enable preview">Preview</button>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="pagination">
+    <div class="pagination-info">
+        Page {{ page }} / {{ total_pages }} ({{ total_entries }} entries)
+    </div>
+    <div class="pagination-actions">
+        {% if page > 1 %}
+            {% if subscription_id %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(page=page-1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0), subscription_id=subscription_id) }}">Previous</a>
+            {% else %}
+                <a class="btn btn-sm" href="{{ request.url.include_query_params(page=page-1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0)) }}">Previous</a>
+            {% endif %}
+        {% else %}
+            <span class="btn btn-sm" style="opacity:0.5;cursor:not-allowed;">Previous</span>
+        {% endif %}
+
+        {% if page < total_pages %}
+            {% if subscription_id %}
+                <a class="btn btn-sm btn-primary" href="{{ request.url.include_query_params(page=page+1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0), subscription_id=subscription_id) }}">Next</a>
+            {% else %}
+                <a class="btn btn-sm btn-primary" href="{{ request.url.include_query_params(page=page+1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0)) }}">Next</a>
+            {% endif %}
+        {% else %}
+            <span class="btn btn-sm btn-primary" style="opacity:0.5;cursor:not-allowed;">Next</span>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No entries yet. Add some subscriptions and run a check!</p>
+</div>
+{% endif %}
+
+<!-- Preview Drawer -->
+<div id="preview-backdrop" class="preview-backdrop hidden" onclick="closePreview()"></div>
+<div id="preview-drawer" class="preview-drawer hidden">
+    <div class="preview-header">
+        <h2 id="preview-title">Preview</h2>
+        <button class="close-btn" onclick="closePreview()" title="Close (Esc)">&times;</button>
+    </div>
+    <div id="preview-content" class="preview-content">
+        <!-- Content loaded dynamically -->
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Markdown renderer -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+// Configure marked for safe rendering
+marked.setOptions({
+    breaks: true,  // Convert \n to <br>
+    gfm: true,     // GitHub Flavored Markdown
+});
+
+async function fetchExa(entryId, btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {
+        const data = await apiCall(`/api/exa/fetch/${entryId}`, { method: 'POST' });
+        btn.textContent = 'Exa ✓';
+        btn.className = 'badge badge-exa';
+        btn.onclick = null;
+        btn.title = `Exa content: ${data.text_length} chars`;
+
+        // Enable the Preview button next to it
+        const previewBtn = btn.nextElementSibling;
+        if (previewBtn && previewBtn.classList.contains('btn-preview')) {
+            previewBtn.disabled = false;
+            previewBtn.onclick = () => openPreview(entryId);
+            previewBtn.title = 'Preview Exa content';
+        }
+    } catch (error) {
+        btn.disabled = false;
+        btn.textContent = 'Exa';
+        alert('Failed to fetch: ' + error.message);
+    }
+}
+
+// Preview drawer functions
+async function openPreview(entryId) {
+    const backdrop = document.getElementById('preview-backdrop');
+    const drawer = document.getElementById('preview-drawer');
+    const content = document.getElementById('preview-content');
+    const title = document.getElementById('preview-title');
+
+    // Show loading state
+    title.textContent = 'Loading...';
+    content.innerHTML = '<div class="preview-loading">Loading preview...</div>';
+    backdrop.classList.remove('hidden');
+    drawer.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+
+    try {
+        const data = await apiCall(`/api/entries/${entryId}/exa/preview`);
+        title.textContent = data.entry_title || 'Preview';
+
+        if (data.results && data.results.length > 0) {
+            const result = data.results[0];
+            content.innerHTML = renderPreviewContent(result, data);
+        } else {
+            content.innerHTML = '<div class="preview-error">No results available</div>';
+        }
+    } catch (error) {
+        title.textContent = 'Error';
+        content.innerHTML = `<div class="preview-error">Failed to load preview: ${error.message}</div>`;
+    }
+}
+
+function renderPreviewContent(result, data) {
+    let html = '<div class="preview-meta">';
+
+    if (result.title) {
+        html += `<div class="preview-meta-item"><strong>Title:</strong> ${escapeHtml(result.title)}</div>`;
+    }
+    if (result.url) {
+        html += `<div class="preview-meta-item"><strong>URL:</strong> <a href="${escapeHtml(result.url)}" target="_blank">${escapeHtml(result.url)}</a></div>`;
+    }
+    if (result.author) {
+        html += `<div class="preview-meta-item"><strong>Author:</strong> ${escapeHtml(result.author)}</div>`;
+    }
+    if (data.cost_dollars && data.cost_dollars.total !== undefined) {
+        html += `<div class="preview-meta-item"><strong>Cost:</strong> $${data.cost_dollars.total.toFixed(4)}</div>`;
+    }
+    if (data.search_time !== undefined) {
+        html += `<div class="preview-meta-item"><strong>Fetch time:</strong> ${data.search_time.toFixed(0)}ms</div>`;
+    }
+
+    html += '</div>';
+
+    html += '<div class="preview-text-header">Content</div>';
+    if (result.text) {
+        // Render text as Markdown
+        html += `<div class="preview-text preview-markdown">${marked.parse(result.text)}</div>`;
+    } else {
+        html += '<div class="preview-text preview-empty">No text content available</div>';
+    }
+
+    return html;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function closePreview() {
+    const backdrop = document.getElementById('preview-backdrop');
+    const drawer = document.getElementById('preview-drawer');
+    backdrop.classList.add('hidden');
+    drawer.classList.add('hidden');
+    document.body.style.overflow = '';
+}
+
+// Close on Escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closePreview();
+    }
+});
+</script>
+{% endblock %}

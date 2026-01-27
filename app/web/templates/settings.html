@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Journal Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Settings</h1>
+</div>
+
+<div id="result-message" class="message hidden"></div>
+
+<!-- Bark Push Notification -->
+<div class="card">
+    <h2>Bark Push Notification</h2>
+    <form id="bark-form" onsubmit="saveSettings(event, 'bark')">
+        <div class="form-group">
+            <label for="bark_device_key">Device Key</label>
+            <input type="text" id="bark_device_key" name="bark_device_key" 
+                   placeholder="{% if bark_configured %}(configured - enter new value to change){% else %}Enter your Bark device key{% endif %}">
+            <span class="hint">Get your device key from the <a href="https://github.com/Finb/Bark" target="_blank">Bark app</a> on your iPhone. Leave empty to keep current value.</span>
+        </div>
+        <div class="form-group">
+            <label for="bark_server_url">Server URL</label>
+            <input type="url" id="bark_server_url" name="bark_server_url" value="{{ settings.bark_server_url }}">
+            <span class="hint">Default is https://api.day.app. Change only if using self-hosted Bark server.</span>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Bark Settings</button>
+            {% if bark_configured %}
+            <button type="button" class="btn" onclick="testPush()">Send Test Notification</button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Exa AI Content Extraction -->
+<div class="card">
+    <h2>Exa AI Content Extraction</h2>
+    <form id="exa-form" onsubmit="saveSettings(event, 'exa')">
+        <div class="form-group">
+            <label for="exa_api_key">API Key</label>
+            <input type="text" id="exa_api_key" name="exa_api_key"
+                   placeholder="{% if exa_configured %}(configured - enter new value to change){% else %}Enter your Exa API key{% endif %}">
+            <span class="hint">Get your API key from <a href="https://exa.ai/" target="_blank">exa.ai</a>. Leave empty to keep current value.</span>
+        </div>
+        <div class="form-group">
+            <label for="exa_text_max_chars">Max Text Characters</label>
+            <input type="number" id="exa_text_max_chars" name="exa_text_max_chars" value="{{ settings.exa_text_max_chars }}" min="1000" max="500000">
+            <span class="hint">Maximum characters to store for extracted text (default: 50000).</span>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Exa Settings</button>
+            {% if exa_configured %}
+            <button type="button" class="btn" onclick="testExa()">Test Exa API</button>
+            <span id="exa-result" class="hint" style="margin-left: 10px;"></span>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Schedule -->
+<div class="card">
+    <h2>Schedule</h2>
+    <form id="schedule-form" onsubmit="saveSettings(event, 'schedule')">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="check_hour">Check Hour (0-23)</label>
+                <input type="number" id="check_hour" name="check_hour" value="{{ settings.check_hour }}" min="0" max="23">
+            </div>
+            <div class="form-group">
+                <label for="check_minute">Check Minute (0-59)</label>
+                <input type="number" id="check_minute" name="check_minute" value="{{ settings.check_minute }}" min="0" max="59">
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="timezone">Timezone</label>
+            <input type="text" id="timezone" name="timezone" value="{{ settings.timezone }}">
+            <span class="hint">e.g., Asia/Shanghai, America/New_York, Europe/London</span>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Schedule</button>
+        </div>
+    </form>
+</div>
+
+<!-- Push Behavior -->
+<div class="card">
+    <h2>Push Behavior</h2>
+    <form id="push-form" onsubmit="saveSettings(event, 'push')">
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="push_merge_entries" name="push_merge_entries" {% if settings.push_merge_entries %}checked{% endif %}>
+                Merge multiple entries into one notification per journal
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="push_max_entries_per_message">Max Entries per Message</label>
+            <input type="number" id="push_max_entries_per_message" name="push_max_entries_per_message" value="{{ settings.push_max_entries_per_message }}" min="1" max="50">
+            <span class="hint">Maximum number of article titles to include in a merged notification.</span>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Push Settings</button>
+        </div>
+    </form>
+</div>
+
+<!-- HTTP Client -->
+<div class="card">
+    <h2>HTTP Client</h2>
+    <form id="http-form" onsubmit="saveSettings(event, 'http')">
+        <div class="form-group">
+            <label for="request_timeout">Request Timeout (seconds)</label>
+            <input type="number" id="request_timeout" name="request_timeout" value="{{ settings.request_timeout }}" min="5" max="300">
+        </div>
+        <div class="form-group">
+            <label for="user_agent">User-Agent</label>
+            <input type="text" id="user_agent" name="user_agent" value="{{ settings.user_agent }}">
+            <span class="hint">Include a contact email for Crossref API compliance.</span>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save HTTP Settings</button>
+        </div>
+    </form>
+</div>
+
+<!-- Authentication -->
+<div class="card">
+    <h2>Authentication</h2>
+    <form id="auth-form" onsubmit="saveSettings(event, 'auth')">
+        <div class="form-group">
+            <label for="auth_username">Username</label>
+            <input type="text" id="auth_username" name="auth_username" value="{{ settings.auth_username }}">
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Username</button>
+        </div>
+    </form>
+    
+    <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border-color);">
+    
+    <h3>Change Password</h3>
+    <form id="password-form" onsubmit="setPassword(event)">
+        <div class="form-group">
+            <label for="new_password">New Password</label>
+            <input type="password" id="new_password" name="new_password" minlength="8" placeholder="Minimum 8 characters">
+        </div>
+        <div class="form-group">
+            <label for="confirm_password">Confirm Password</label>
+            <input type="password" id="confirm_password" name="confirm_password" placeholder="Re-enter password">
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Set New Password</button>
+            <button type="button" class="btn" onclick="rotatePassword()">Generate Random Password</button>
+        </div>
+    </form>
+</div>
+
+<!-- Generated Password Modal -->
+<div id="password-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>New Password Generated</h2>
+            <button class="close-btn" onclick="hidePasswordModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p><strong>Your new password:</strong></p>
+            <div class="password-display">
+                <code id="generated-password"></code>
+                <button type="button" class="btn btn-sm" onclick="copyPassword()">Copy</button>
+            </div>
+            <p class="hint" style="margin-top: 15px; color: var(--danger-color);">
+                Please save this password! It will not be shown again.
+            </p>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn btn-primary" onclick="hidePasswordModal()">I've saved it</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.form-row {
+    display: flex;
+    gap: 20px;
+}
+.form-row .form-group {
+    flex: 1;
+}
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+}
+.password-display {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-secondary);
+    padding: 15px;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+.password-display code {
+    font-size: 1.2em;
+    flex: 1;
+    word-break: break-all;
+}
+</style>
+
+<script>
+async function saveSettings(event, section) {
+    event.preventDefault();
+    const form = event.target;
+    const data = {};
+    
+    // Collect form data based on section
+    if (section === 'bark') {
+        const deviceKey = form.bark_device_key.value.trim();
+        if (deviceKey) data.bark_device_key = deviceKey;
+        data.bark_server_url = form.bark_server_url.value.trim();
+    } else if (section === 'exa') {
+        const apiKey = form.exa_api_key.value.trim();
+        if (apiKey) data.exa_api_key = apiKey;
+        data.exa_text_max_chars = parseInt(form.exa_text_max_chars.value);
+    } else if (section === 'schedule') {
+        data.check_hour = parseInt(form.check_hour.value);
+        data.check_minute = parseInt(form.check_minute.value);
+        data.timezone = form.timezone.value.trim();
+    } else if (section === 'push') {
+        data.push_merge_entries = form.push_merge_entries.checked;
+        data.push_max_entries_per_message = parseInt(form.push_max_entries_per_message.value);
+    } else if (section === 'http') {
+        data.request_timeout = parseInt(form.request_timeout.value);
+        data.user_agent = form.user_agent.value.trim();
+    } else if (section === 'auth') {
+        data.auth_username = form.auth_username.value.trim();
+    }
+    
+    try {
+        await apiCall('/api/settings', {
+            method: 'PUT',
+            body: JSON.stringify(data)
+        });
+        showMessage('Settings saved successfully!', 'success');
+        
+        // Clear sensitive input fields after save
+        if (section === 'bark') form.bark_device_key.value = '';
+        if (section === 'exa') form.exa_api_key.value = '';
+        
+    } catch (error) {
+        showMessage('Failed to save: ' + error.message, 'error');
+    }
+}
+
+async function setPassword(event) {
+    event.preventDefault();
+    const form = event.target;
+    const password = form.new_password.value;
+    const confirm = form.confirm_password.value;
+    
+    if (password !== confirm) {
+        showMessage('Passwords do not match', 'error');
+        return;
+    }
+    
+    if (password.length < 8) {
+        showMessage('Password must be at least 8 characters', 'error');
+        return;
+    }
+    
+    try {
+        await apiCall('/api/settings/password', {
+            method: 'POST',
+            body: JSON.stringify({ password: password })
+        });
+        showMessage('Password updated successfully!', 'success');
+        form.reset();
+    } catch (error) {
+        showMessage('Failed to update password: ' + error.message, 'error');
+    }
+}
+
+async function rotatePassword() {
+    if (!confirm('This will generate a new random password. Continue?')) return;
+    
+    try {
+        const result = await apiCall('/api/settings/password/rotate', { method: 'POST' });
+        document.getElementById('generated-password').textContent = result.password;
+        document.getElementById('password-modal').classList.remove('hidden');
+    } catch (error) {
+        showMessage('Failed to generate password: ' + error.message, 'error');
+    }
+}
+
+function hidePasswordModal() {
+    document.getElementById('password-modal').classList.add('hidden');
+}
+
+function copyPassword() {
+    const password = document.getElementById('generated-password').textContent;
+    navigator.clipboard.writeText(password).then(() => {
+        showMessage('Password copied to clipboard', 'success');
+    }).catch(() => {
+        showMessage('Failed to copy password', 'error');
+    });
+}
+
+async function testPush() {
+    try {
+        await apiCall('/api/push/test', {
+            method: 'POST',
+            body: JSON.stringify({
+                title: 'Test Notification',
+                body: 'Settings page test from Journal Monitor'
+            })
+        });
+        showMessage('Test notification sent! Check your phone.', 'success');
+    } catch (error) {
+        showMessage('Failed to send: ' + error.message, 'error');
+    }
+}
+
+async function testExa() {
+    const resultSpan = document.getElementById('exa-result');
+    resultSpan.textContent = 'Testing...';
+    try {
+        const data = await apiCall('/api/exa/test', { method: 'POST' });
+        resultSpan.textContent = '';
+        showMessage(`Exa API OK! Cost: $${data.cost_total.toFixed(4)}, Time: ${data.search_time_ms.toFixed(0)}ms`, 'success');
+    } catch (error) {
+        resultSpan.textContent = '';
+        showMessage('Exa test failed: ' + error.message, 'error');
+    }
+}
+
+function showMessage(text, type) {
+    const msg = document.getElementById('result-message');
+    msg.textContent = text;
+    msg.className = `message message-${type}`;
+    setTimeout(() => msg.className = 'message hidden', 5000);
+}
+</script>
+{% endblock %}

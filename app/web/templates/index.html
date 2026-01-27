@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Journal Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <button class="btn btn-primary" onclick="runCheck()">Run Check Now</button>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ subscription_count }}</div>
+        <div class="stat-label">Subscriptions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ entry_count }}</div>
+        <div class="stat-label">Total Entries</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">
+            {% if last_run %}
+                {{ last_run.total_new_entries }}
+            {% else %}
+                -
+            {% endif %}
+        </div>
+        <div class="stat-label">New (Last Run)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">
+            {% if last_run %}
+                <span class="status-badge status-{{ last_run.status }}">{{ last_run.status }}</span>
+            {% else %}
+                <span class="status-badge status-none">No runs yet</span>
+            {% endif %}
+        </div>
+        <div class="stat-label">Last Run Status</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Schedule</h2>
+    <div class="schedule-info">
+        <p><strong>Check Time:</strong> {{ settings.check_hour }}:{{ "%02d"|format(settings.check_minute) }} ({{ settings.timezone }})</p>
+        {% if next_run %}
+            <p><strong>Next Run:</strong> {{ next_run }}</p>
+        {% endif %}
+        {% if last_run %}
+            <p><strong>Last Run:</strong> {{ last_run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Quick Actions</h2>
+    <div class="actions">
+        <a href="/subscriptions" class="btn">Manage Subscriptions</a>
+        <a href="/entries" class="btn">View Entries</a>
+        <button class="btn" onclick="testPush()">Test Push Notification</button>
+    </div>
+</div>
+
+<div id="result-message" class="message hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function runCheck() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    
+    try {
+        const result = await apiCall('/api/check/run', { method: 'POST' });
+        showMessage(`Check completed: ${result.new_entries} new entries, ${result.notifications} notifications`, 'success');
+        setTimeout(() => location.reload(), 2000);
+    } catch (error) {
+        showMessage('Check failed: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Check Now';
+    }
+}
+
+async function testPush() {
+    try {
+        await apiCall('/api/push/test', {
+            method: 'POST',
+            body: JSON.stringify({
+                title: 'Test Notification',
+                body: 'This is a test from Journal Monitor'
+            })
+        });
+        showMessage('Test notification sent!', 'success');
+    } catch (error) {
+        showMessage('Failed to send: ' + error.message, 'error');
+    }
+}
+
+function showMessage(text, type) {
+    const msg = document.getElementById('result-message');
+    msg.textContent = text;
+    msg.className = `message message-${type}`;
+    setTimeout(() => msg.className = 'message hidden', 5000);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Journal Monitor{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="/" class="logo">Journal Monitor</a>
+            <ul class="nav-links">
+                {% if logged_in %}
+                <li><a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Dashboard</a></li>
+                <li><a href="/subscriptions" {% if request.url.path == "/subscriptions" %}class="active"{% endif %}>Subscriptions</a></li>
+                {% endif %}
+                <li><a href="/entries" {% if request.url.path == "/entries" %}class="active"{% endif %}>Entries</a></li>
+                {% if logged_in %}
+                <li><a href="/settings" {% if request.url.path == "/settings" %}class="active"{% endif %}>Settings</a></li>
+                <li><a href="/logout" class="nav-logout">Logout</a></li>
+                {% else %}
+                <li><a href="/login" {% if request.url.path == "/login" %}class="active"{% endif %}>Login</a></li>
+                {% endif %}
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>Journal Monitor v0.1.0</p>
+        </div>
+    </footer>
+
+    <script>
+        // Helper function for API calls
+        async function apiCall(url, options = {}) {
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...options.headers
+                    },
+                    ...options
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'API request failed');
+                }
+                return await response.json();
+            } catch (error) {
+                console.error('API Error:', error);
+                throw error;
+            }
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

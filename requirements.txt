@@ -1,0 +1,31 @@
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Template engine
+jinja2>=3.1.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# RSS parsing
+feedparser>=6.0.0
+
+# HTTP client
+httpx>=0.26.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Data validation
+pydantic>=2.5.0
+
+# Date/time handling
+python-dateutil>=2.8.0
+
+# file upload
+python-multipart>=0.0.22
+
+# security
+itsdangerous>=2.2.0

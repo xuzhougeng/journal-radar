@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}Subscriptions - Journal Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Subscriptions</h1>
+    <div class="page-actions">
+        <a class="btn" href="/api/subscriptions/export">Export</a>
+        <button class="btn" onclick="showImportModal()">Import</button>
+        <button class="btn btn-primary" onclick="showAddModal()">Add Subscription</button>
+    </div>
+</div>
+
+<div id="result-message" class="message hidden"></div>
+
+{% if subscriptions %}
+<div class="table-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sub in subscriptions %}
+            <tr id="sub-{{ sub.id }}">
+                <td>{{ sub.name }}</td>
+                <td><span class="badge badge-{{ sub.source_type }}">{{ sub.source_type }}</span></td>
+                <td>
+                    <span class="status-indicator {{ 'enabled' if sub.enabled else 'disabled' }}">
+                        {{ 'Enabled' if sub.enabled else 'Disabled' }}
+                    </span>
+                </td>
+                <td>{{ sub.created_at.strftime('%Y-%m-%d') }}</td>
+                <td class="actions">
+                    <button class="btn btn-sm" onclick="toggleSubscription({{ sub.id }})">
+                        {{ 'Disable' if sub.enabled else 'Enable' }}
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteSubscription({{ sub.id }}, '{{ sub.name }}')">
+                        Delete
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No subscriptions yet. Add your first journal to start monitoring!</p>
+</div>
+{% endif %}
+
+<!-- Add Subscription Modal -->
+<div id="add-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add Subscription</h2>
+            <button class="close-btn" onclick="hideAddModal()">&times;</button>
+        </div>
+        <form id="add-form" onsubmit="addSubscription(event)">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" required placeholder="e.g., Nature Medicine">
+            </div>
+            <div class="form-group">
+                <label for="source_type">Source Type</label>
+                <select id="source_type" name="source_type" onchange="updateConfigFields()">
+                    <option value="rss">RSS Feed</option>
+                    <option value="crossref">Crossref (ISSN)</option>
+                </select>
+            </div>
+            <div id="config-fields">
+                <div class="form-group" id="rss-config">
+                    <label for="feed_url">Feed URL</label>
+                    <input type="url" id="feed_url" name="feed_url" placeholder="https://example.com/feed.xml">
+                </div>
+                <div class="form-group hidden" id="crossref-config">
+                    <label for="issn">ISSN</label>
+                    <input type="text" id="issn" name="issn" placeholder="1234-5678">
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideAddModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Import Subscriptions Modal -->
+<div id="import-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Import Subscriptions</h2>
+            <button class="close-btn" onclick="hideImportModal()">&times;</button>
+        </div>
+        <form id="import-form" onsubmit="importSubscriptions(event)">
+            <div class="form-group">
+                <label for="import_file">JSON File</label>
+                <input type="file" id="import_file" name="file" accept="application/json,.json" required>
+            </div>
+            <p class="hint">
+                Export a JSON file from this page and import it here. Existing subscriptions (same source + config) will be skipped.
+            </p>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideImportModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Import</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showAddModal() {
+    document.getElementById('add-modal').classList.remove('hidden');
+}
+
+function hideAddModal() {
+    document.getElementById('add-modal').classList.add('hidden');
+    document.getElementById('add-form').reset();
+    updateConfigFields();
+}
+
+function showImportModal() {
+    document.getElementById('import-modal').classList.remove('hidden');
+}
+
+function hideImportModal() {
+    document.getElementById('import-modal').classList.add('hidden');
+    document.getElementById('import-form').reset();
+}
+
+function updateConfigFields() {
+    const sourceType = document.getElementById('source_type').value;
+    document.getElementById('rss-config').classList.toggle('hidden', sourceType !== 'rss');
+    document.getElementById('crossref-config').classList.toggle('hidden', sourceType !== 'crossref');
+}
+
+async function addSubscription(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const sourceType = formData.get('source_type');
+    
+    let config = {};
+    if (sourceType === 'rss') {
+        config.feed_url = formData.get('feed_url');
+    } else if (sourceType === 'crossref') {
+        config.issn = formData.get('issn');
+    }
+    
+    try {
+        await apiCall('/api/subscriptions', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: formData.get('name'),
+                source_type: sourceType,
+                config: config
+            })
+        });
+        showMessage('Subscription added!', 'success');
+        setTimeout(() => location.reload(), 1000);
+    } catch (error) {
+        showMessage('Failed to add: ' + error.message, 'error');
+    }
+}
+
+async function toggleSubscription(id) {
+    try {
+        const result = await apiCall(`/api/subscriptions/${id}/toggle`, { method: 'PATCH' });
+        showMessage(`Subscription ${result.enabled ? 'enabled' : 'disabled'}`, 'success');
+        setTimeout(() => location.reload(), 1000);
+    } catch (error) {
+        showMessage('Failed to toggle: ' + error.message, 'error');
+    }
+}
+
+async function deleteSubscription(id, name) {
+    if (!confirm(`Delete subscription "${name}"? This will also delete all associated entries.`)) {
+        return;
+    }
+    
+    try {
+        await apiCall(`/api/subscriptions/${id}`, { method: 'DELETE' });
+        document.getElementById(`sub-${id}`).remove();
+        showMessage('Subscription deleted', 'success');
+    } catch (error) {
+        showMessage('Failed to delete: ' + error.message, 'error');
+    }
+}
+
+async function importSubscriptions(event) {
+    event.preventDefault();
+    const input = document.getElementById('import_file');
+    if (!input.files || !input.files.length) {
+        showMessage('Please select a file', 'error');
+        return;
+    }
+
+    const form = new FormData();
+    form.append('file', input.files[0]);
+
+    try {
+        const response = await fetch('/api/subscriptions/import', {
+            method: 'POST',
+            body: form
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Import failed');
+        }
+
+        const result = await response.json();
+        const errCount = (result.errors || []).length;
+        if (errCount) {
+            showMessage(`Imported: ${result.created}, skipped: ${result.skipped}, errors: ${errCount}`, 'error');
+        } else {
+            showMessage(`Imported: ${result.created}, skipped: ${result.skipped}`, 'success');
+        }
+        hideImportModal();
+        setTimeout(() => location.reload(), 1200);
+    } catch (error) {
+        showMessage('Failed to import: ' + error.message, 'error');
+    }
+}
+
+function showMessage(text, type) {
+    const msg = document.getElementById('result-message');
+    msg.textContent = text;
+    msg.className = `message message-${type}`;
+    setTimeout(() => msg.className = 'message hidden', 5000);
+}
+</script>
+{% endblock %}
