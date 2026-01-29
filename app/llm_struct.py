@@ -87,17 +87,26 @@ def build_prompt(title: Optional[str], url: Optional[str], text: Optional[str]) 
 **Page Content:**
 {truncated_text or "No content available."}
 
+**Classification guidance (important):**
+- Use "paper" ONLY when the page is the academic paper/preprint itself (or a full-text page) with strong scholarly signals: authors, affiliations, abstract, sections like Introduction/Methods/Results/Discussion, references, and/or DOI/arXiv/PMID.
+- Reviews can be "paper" only if they still show the academic signals above.
+- Use "journal" for journal/publisher landing pages, table-of-contents pages, or paywalled article landing pages that are not the full paper text.
+- Use "news" for news/press/obituary/commemorative profiles/interviews or general-audience reports on scientific work.
+- Use "blog" for personal/lab commentary or informal essays.
+- If the content is a tribute/biography/overview of a scientist's contributions without original research details, do NOT label it as "paper".
+
 **Task:**
 1. Determine the site type from the following categories: {site_types_list}, or "other" if none fit.
 2. If "other", provide a brief reason why it doesn't fit any category.
 3. Write a concise summary (2-4 sentences) of the page content.
+4. The summary and site_type_reason MUST be written in Chinese. Keep "site_type" as one of the categories above.
 
 **Output Format:**
 Return a JSON object with the following structure:
 {{
     "site_type": "<one of the categories or 'other'>",
     "site_type_reason": "<reason if site_type is 'other', otherwise null>",
-    "summary": "<2-4 sentence summary>"
+    "summary": "<2-4 sentence summary in Chinese>"
 }}
 
 Only output the JSON object, no other text."""
@@ -264,14 +273,14 @@ def parse_llm_response(response: dict) -> dict:
         # Ensure site_type_reason is set for 'other'
         site_type_reason = data.get("site_type_reason")
         if site_type == "other" and not site_type_reason:
-            site_type_reason = "Unspecified"
+            site_type_reason = "未说明"
         elif site_type != "other":
             site_type_reason = None
         
         # Validate summary
         summary = data.get("summary", "")
         if not summary:
-            summary = "No summary available."
+            summary = "暂无摘要。"
         
         return {
             "site_type": site_type,
@@ -310,7 +319,7 @@ async def extract_structured_info(
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant that analyzes web pages and extracts structured information. Always respond with valid JSON.",
+            "content": "You are a helpful assistant that analyzes web pages and extracts structured information. Be conservative: only classify as 'paper' when explicit academic-paper signals are present. Always respond with valid JSON. Write the summary and site_type_reason in Chinese.",
         },
         {
             "role": "user",

@@ -166,6 +166,16 @@ async def fetch_parse_content_for_entries(
                 f"Saved content for entry {entry_id} via {parse_result.provider} "
                 f"(text: {len(truncated_text or '')} chars)"
             )
+            
+            # Infer and update parse type
+            from app.entry_type import update_parse_type
+            await update_parse_type(
+                session,
+                entry_id,
+                url=parse_result.final_url or link,
+                title=parse_result.title,
+                text=truncated_text,
+            )
 
     await session.commit()
     logger.info(f"Saved parse content for {len(saved_entry_ids)}/{len(new_entries)} entries")
@@ -253,6 +263,15 @@ async def fetch_llm_structure_for_entries(
             if insert_result.rowcount > 0:
                 saved_count += 1
                 logger.debug(f"Saved LLM structure for entry {entry_id}: {result.site_type}")
+                
+                # Sync LLM type to EntryType
+                from app.entry_type import update_llm_type
+                await update_llm_type(
+                    session,
+                    entry_id,
+                    llm_type=result.site_type,
+                    llm_reason=result.site_type_reason,
+                )
 
         except Exception as e:
             logger.warning(f"LLM extraction failed for entry {entry_id}: {e}")

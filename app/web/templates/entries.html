@@ -6,20 +6,31 @@
 <div class="page-header">
     <h1>Recent Entries</h1>
     <div class="page-actions">
-        {% if include_news %}
-            {% if subscription_id %}
-                <a class="btn" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Hide news</a>
-            {% else %}
-                <a class="btn" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size) }}">Hide news</a>
-            {% endif %}
-        {% else %}
-            {% if subscription_id %}
-                <a class="btn" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Show news</a>
-            {% else %}
-                <a class="btn" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size) }}">Show news</a>
-            {% endif %}
-        {% endif %}
-        <form method="get" action="/entries" class="sort-form">
+        <form method="get" action="/entries" class="sort-form" id="filter-form">
+            <label class="sort-label">Type</label>
+            <div class="multi-select-dropdown" id="type-dropdown">
+                <button type="button" class="multi-select-trigger sort-select" onclick="toggleTypeDropdown(event)">
+                    <span class="multi-select-text">{% if type_filter %}{{ type_filter|length }} selected{% else %}All types{% endif %}</span>
+                    <span class="multi-select-arrow">▼</span>
+                </button>
+                <div class="multi-select-menu hidden" id="type-menu">
+                    <div class="multi-select-actions">
+                        <button type="button" class="btn btn-xs" onclick="selectAllTypes()">Select All</button>
+                        <button type="button" class="btn btn-xs" onclick="clearAllTypes()">Clear All</button>
+                    </div>
+                    <div class="multi-select-options">
+                        {% for t in valid_types %}
+                        <label class="multi-select-option">
+                            <input type="checkbox" name="type_filter" value="{{ t }}" {% if t in type_filter %}checked{% endif %} onchange="updateTypeFilterText()">
+                            <span class="badge badge-type badge-type-{{ t }}">{{ t }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <div class="multi-select-footer">
+                        <button type="button" class="btn btn-xs btn-primary" onclick="applyTypeFilter()">Apply</button>
+                    </div>
+                </div>
+            </div>
             <label for="subscription_id" class="sort-label">Journal</label>
             <select id="subscription_id" name="subscription_id" class="sort-select" onchange="this.form.submit()">
                 <option value="">All journals</option>
@@ -35,9 +46,8 @@
                 <option value="published" {% if sort == 'published' %}selected{% endif %}>By published time</option>
                 <option value="journal" {% if sort == 'journal' %}selected{% endif %}>By journal</option>
             </select>
-            <input type="hidden" name="page" value="1" />
+            <input type="hidden" name="page" value="{{ page }}" />
             <input type="hidden" name="page_size" value="{{ page_size or 10 }}" />
-            <input type="hidden" name="include_news" value="{{ 1 if include_news else 0 }}" />
             <noscript><button type="submit">Apply</button></noscript>
         </form>
     </div>
@@ -46,9 +56,13 @@
 {% if entries %}
 <div class="entries-list">
     {% for entry in entries %}
-    <div class="entry-card">
+    <div class="entry-card" data-entry-id="{{ entry.id }}">
         <div class="entry-header">
-            <a href="{{ entry.link }}" target="_blank" class="entry-title">{{ entry.title }}</a>
+            <div class="entry-header-left">
+                {% set effective_type = entry.type_info.effective_type if entry.type_info else (entry.structured.site_type if entry.structured else 'other') %}
+                <span class="badge badge-type badge-type-{{ effective_type }}" data-type-badge title="Article type: {{ effective_type }}{% if entry.type_info and entry.type_info.user_type %} (user override){% elif entry.type_info and entry.type_info.llm_type %} (LLM){% elif entry.type_info and entry.type_info.parse_type %} (parse){% endif %}">{{ effective_type }}</span>
+                <a href="{{ entry.link }}" target="_blank" class="entry-title">{{ entry.title }}</a>
+            </div>
             {% if entry.notified %}
                 <span class="badge badge-notified">Notified</span>
             {% endif %}
@@ -108,21 +122,13 @@
     </div>
     <div class="pagination-actions">
         {% if page > 1 %}
-            {% if subscription_id %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(page=page-1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0), subscription_id=subscription_id) }}">Previous</a>
-            {% else %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(page=page-1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0)) }}">Previous</a>
-            {% endif %}
+            <a class="btn btn-sm" href="#" data-page="{{ page - 1 }}" data-direction="prev" onclick="navigatePage({{ page - 1 }}); return false;">Previous</a>
         {% else %}
             <span class="btn btn-sm" style="opacity:0.5;cursor:not-allowed;">Previous</span>
         {% endif %}
 
         {% if page < total_pages %}
-            {% if subscription_id %}
-                <a class="btn btn-sm btn-primary" href="{{ request.url.include_query_params(page=page+1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0), subscription_id=subscription_id) }}">Next</a>
-            {% else %}
-                <a class="btn btn-sm btn-primary" href="{{ request.url.include_query_params(page=page+1, sort=sort, page_size=page_size, include_news=(1 if include_news else 0)) }}">Next</a>
-            {% endif %}
+            <a class="btn btn-sm btn-primary" href="#" data-page="{{ page + 1 }}" data-direction="next" onclick="navigatePage({{ page + 1 }}); return false;">Next</a>
         {% else %}
             <span class="btn btn-sm btn-primary" style="opacity:0.5;cursor:not-allowed;">Next</span>
         {% endif %}
@@ -135,11 +141,11 @@
 {% endif %}
 
 <!-- Preview Drawer -->
-<div id="preview-backdrop" class="preview-backdrop hidden" onclick="closePreview()"></div>
-<div id="preview-drawer" class="preview-drawer hidden">
+<div id="preview-backdrop" class="preview-backdrop" onclick="closePreview()"></div>
+<div id="preview-drawer" class="preview-drawer" role="dialog" aria-modal="true" aria-labelledby="preview-title">
     <div class="preview-header">
         <h2 id="preview-title">Preview</h2>
-        <button class="close-btn" onclick="closePreview()" title="Close (Esc)">&times;</button>
+        <button id="preview-close-btn" class="close-btn" onclick="closePreview()" title="Close (Esc)" aria-label="Close preview">&times;</button>
     </div>
     <div id="preview-content" class="preview-content">
         <!-- Content loaded dynamically -->
@@ -156,6 +162,75 @@ marked.setOptions({
     breaks: true,  // Convert \n to <br>
     gfm: true,     // GitHub Flavored Markdown
 });
+
+// Multi-select dropdown functions
+function toggleTypeDropdown(event) {
+    event.stopPropagation();
+    const menu = document.getElementById('type-menu');
+    menu.classList.toggle('hidden');
+}
+
+function closeTypeDropdown() {
+    const menu = document.getElementById('type-menu');
+    if (menu) menu.classList.add('hidden');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e) {
+    const dropdown = document.getElementById('type-dropdown');
+    if (dropdown && !dropdown.contains(e.target)) {
+        closeTypeDropdown();
+    }
+});
+
+function getSelectedTypes() {
+    const checkboxes = document.querySelectorAll('#type-menu input[type="checkbox"]:checked');
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
+function updateTypeFilterText() {
+    const selected = getSelectedTypes();
+    const textSpan = document.querySelector('.multi-select-text');
+    if (selected.length === 0) {
+        textSpan.textContent = 'All types';
+    } else if (selected.length === 1) {
+        textSpan.textContent = selected[0];
+    } else {
+        textSpan.textContent = selected.length + ' selected';
+    }
+}
+
+function selectAllTypes() {
+    const checkboxes = document.querySelectorAll('#type-menu input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = true);
+    updateTypeFilterText();
+}
+
+function clearAllTypes() {
+    const checkboxes = document.querySelectorAll('#type-menu input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = false);
+    updateTypeFilterText();
+}
+
+function applyTypeFilter() {
+    closeTypeDropdown();
+    submitFilterForm();
+}
+
+function submitFilterForm() {
+    // Reset to page 1 when filters change
+    const form = document.getElementById('filter-form');
+    const pageInput = form.querySelector('input[name="page"]');
+    if (pageInput) pageInput.value = '1';
+    form.submit();
+}
+
+function navigatePage(page) {
+    const form = document.getElementById('filter-form');
+    const pageInput = form.querySelector('input[name="page"]');
+    if (pageInput) pageInput.value = page;
+    form.submit();
+}
 
 async function fetchParse(entryId, btn) {
     btn.disabled = true;
@@ -216,52 +291,126 @@ async function openPreview(entryId, hasStructured = false) {
     const drawer = document.getElementById('preview-drawer');
     const content = document.getElementById('preview-content');
     const title = document.getElementById('preview-title');
+    const closeBtn = document.getElementById('preview-close-btn');
 
     // Show loading state
     title.textContent = 'Loading...';
     content.innerHTML = '<div class="preview-loading">Loading preview...</div>';
-    backdrop.classList.remove('hidden');
-    drawer.classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
+    
+    // Open drawer with animation
+    document.body.classList.add('preview-open');
+    backdrop.classList.add('is-open');
+    drawer.classList.add('is-open');
+    
+    // Focus close button for accessibility
+    setTimeout(() => closeBtn.focus(), 100);
 
     try {
         // Fetch parsed content
         const parseData = await apiCall(`/api/entries/${entryId}/parse/preview`);
         title.textContent = parseData.entry_title || 'Preview';
 
-        // Fetch LLM structured info only if we already have it
+        // Fetch LLM structured info if available (ignore errors if missing)
         let llmData = null;
-        if (hasStructured) {
-            try {
-                llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
-            } catch (e) {
-                // LLM data not available, that's fine
-            }
+        try {
+            llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
+        } catch (e) {
+            // LLM data not available or not configured; ignore.
         }
 
-        content.innerHTML = renderPreviewContent(parseData, llmData, entryId);
+        // Fetch type info (ignore errors if missing)
+        let typeData = null;
+        try {
+            typeData = await apiCall(`/api/entries/${entryId}/type`);
+        } catch (e) {
+            // Type info not available; ignore.
+        }
+
+        content.innerHTML = renderPreviewContent(parseData, llmData, typeData, entryId);
     } catch (error) {
         title.textContent = 'Error';
         content.innerHTML = `<div class="preview-error">Failed to load preview: ${error.message}</div>`;
     }
 }
 
-function renderPreviewContent(parseData, llmData, entryId) {
+function renderPreviewContent(parseData, llmData, typeData, entryId) {
     let html = '';
+
+    // Article Type Classification section (always show)
+    html += '<div class="preview-section preview-type-section">';
+    html += '<div class="preview-section-header">';
+    html += '<span class="preview-text-header">Article Type</span>';
+    html += '</div>';
+    html += '<div class="preview-meta">';
+    
+    const validTypes = typeData?.valid_types || ['blog', 'dataset', 'docs', 'forum', 'journal', 'news', 'other', 'paper', 'product', 'repository'];
+    const effectiveType = typeData?.effective_type || 'other';
+    const userType = typeData?.user_type || '';
+    const llmType = typeData?.llm_type || '';
+    const parseType = typeData?.parse_type || '';
+    
+    // Effective type display
+    html += `<div class="preview-meta-item"><strong>Effective Type:</strong> <span class="badge badge-type badge-type-${effectiveType}">${effectiveType}</span>`;
+    if (userType) {
+        html += ' <span class="hint">(user override)</span>';
+    } else if (llmType) {
+        html += ' <span class="hint">(from LLM)</span>';
+    } else if (parseType) {
+        html += ' <span class="hint">(from parse)</span>';
+    }
+    html += '</div>';
+    
+    // Type sources breakdown
+    if (parseType) {
+        html += `<div class="preview-meta-item"><strong>Parse:</strong> ${parseType}`;
+        if (typeData?.parse_reason) {
+            html += ` <span class="hint">(${escapeHtml(typeData.parse_reason)})</span>`;
+        }
+        html += '</div>';
+    }
+    if (llmType) {
+        html += `<div class="preview-meta-item"><strong>LLM:</strong> ${llmType}`;
+        if (typeData?.llm_reason) {
+            html += ` <span class="hint">(${escapeHtml(typeData.llm_reason)})</span>`;
+        }
+        html += '</div>';
+    }
+    if (userType) {
+        html += `<div class="preview-meta-item"><strong>User:</strong> ${userType}`;
+        if (typeData?.user_reason) {
+            html += ` <span class="hint">(${escapeHtml(typeData.user_reason)})</span>`;
+        }
+        html += '</div>';
+    }
+    
+    // Type editor
+    html += '<div class="preview-meta-item preview-type-editor">';
+    html += '<strong>Override:</strong> ';
+    html += `<select id="type-select-${entryId}" class="type-select">`;
+    html += `<option value="">-- No override --</option>`;
+    for (const t of validTypes) {
+        const selected = (userType === t) ? 'selected' : '';
+        html += `<option value="${t}" ${selected}>${t}</option>`;
+    }
+    html += '</select>';
+    html += `<input type="text" id="type-reason-${entryId}" class="type-reason-input" placeholder="Reason (optional)" value="${escapeHtml(typeData?.user_reason || '')}">`;
+    html += `<button class="btn btn-xs btn-primary" onclick="saveUserType(${entryId})">Save</button>`;
+    if (userType) {
+        html += `<button class="btn btn-xs btn-danger" onclick="clearUserType(${entryId})">Clear</button>`;
+    }
+    html += '</div>';
+    
+    html += '</div>';
+    html += '</div>';
 
     // LLM Structured Summary section (if available)
     if (llmData) {
         html += '<div class="preview-section preview-structured">';
         html += '<div class="preview-section-header">';
-        html += '<span class="preview-text-header">Structured Summary</span>';
+        html += '<span class="preview-text-header">LLM Summary</span>';
         html += `<button class="btn btn-xs" onclick="rerunLlm(${entryId})" title="Re-run LLM extraction">Re-run</button>`;
         html += '</div>';
         html += '<div class="preview-meta">';
-        html += `<div class="preview-meta-item"><strong>Site Type:</strong> <span class="badge badge-type badge-type-${llmData.site_type}">${llmData.site_type}</span>`;
-        if (llmData.site_type_reason) {
-            html += ` <span class="hint">(${escapeHtml(llmData.site_type_reason)})</span>`;
-        }
-        html += '</div>';
         if (llmData.model) {
             html += `<div class="preview-meta-item"><strong>Model:</strong> ${escapeHtml(llmData.model)}</div>`;
         }
@@ -273,8 +422,8 @@ function renderPreviewContent(parseData, llmData, entryId) {
     } else {
         // Show button to generate structured info
         html += '<div class="preview-section preview-structured-empty">';
-        html += '<div class="preview-text-header">Structured Summary</div>';
-        html += `<p class="hint">No structured info available. <button class="btn btn-xs btn-llm" onclick="generateLlmInPreview(${entryId})">Generate with LLM</button></p>`;
+        html += '<div class="preview-text-header">LLM Summary</div>';
+        html += `<p class="hint">No LLM summary available. <button class="btn btn-xs btn-llm" onclick="generateLlmInPreview(${entryId})">Generate with LLM</button></p>`;
         html += '</div>';
     }
 
@@ -361,6 +510,69 @@ async function rerunLlm(entryId) {
     }
 }
 
+async function saveUserType(entryId) {
+    const typeSelect = document.getElementById(`type-select-${entryId}`);
+    const reasonInput = document.getElementById(`type-reason-${entryId}`);
+    
+    const userType = typeSelect.value;
+    const userReason = reasonInput.value.trim();
+    
+    if (!userType) {
+        // If no type selected, clear instead
+        await clearUserType(entryId);
+        return;
+    }
+    
+    try {
+        const data = await apiCall(`/api/entries/${entryId}/type`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                user_type: userType,
+                user_reason: userReason || null,
+            }),
+        });
+        
+        // Update the badge in the card
+        updateCardTypeBadge(entryId, data.effective_type);
+        
+        // Refresh the preview
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to save type: ' + error.message);
+    }
+}
+
+async function clearUserType(entryId) {
+    try {
+        const data = await apiCall(`/api/entries/${entryId}/type/user`, {
+            method: 'DELETE',
+        });
+        
+        // Update the badge in the card
+        updateCardTypeBadge(entryId, data.effective_type);
+        
+        // Refresh the preview
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to clear type: ' + error.message);
+    }
+}
+
+function updateCardTypeBadge(entryId, newType) {
+    const card = document.querySelector(`.entry-card[data-entry-id="${entryId}"]`);
+    if (!card) return;
+    
+    const badge = card.querySelector('[data-type-badge]');
+    if (!badge) return;
+    
+    // Remove old type class
+    badge.className = badge.className.replace(/badge-type-\w+/g, '');
+    // Add new type class
+    badge.classList.add(`badge-type-${newType}`);
+    badge.textContent = newType;
+    badge.title = `Article type: ${newType}`;
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -370,15 +582,43 @@ function escapeHtml(text) {
 function closePreview() {
     const backdrop = document.getElementById('preview-backdrop');
     const drawer = document.getElementById('preview-drawer');
-    backdrop.classList.add('hidden');
-    drawer.classList.add('hidden');
-    document.body.style.overflow = '';
+    
+    // Close drawer with animation
+    backdrop.classList.remove('is-open');
+    drawer.classList.remove('is-open');
+    document.body.classList.remove('preview-open');
 }
 
-// Close on Escape key
+// Keyboard shortcuts
 document.addEventListener('keydown', function(e) {
+    // Escape: close preview
     if (e.key === 'Escape') {
         closePreview();
+        return;
+    }
+    
+    // Skip if user is typing in an input/select/textarea
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+        return;
+    }
+    
+    // Skip if preview drawer is open
+    const drawer = document.getElementById('preview-drawer');
+    if (drawer && !drawer.classList.contains('hidden')) {
+        return;
+    }
+    
+    // Arrow keys for pagination
+    if (e.key === 'ArrowLeft') {
+        const prevLink = document.querySelector('.pagination-actions a[data-direction="prev"][data-page]');
+        if (prevLink && prevLink.dataset.page) {
+            navigatePage(parseInt(prevLink.dataset.page, 10));
+        }
+    } else if (e.key === 'ArrowRight') {
+        const nextLink = document.querySelector('.pagination-actions a[data-direction="next"][data-page]');
+        if (nextLink && nextLink.dataset.page) {
+            navigatePage(parseInt(nextLink.dataset.page, 10));
+        }
     }
 });
 </script>

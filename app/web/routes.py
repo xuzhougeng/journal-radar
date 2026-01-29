@@ -5,10 +5,10 @@ Web page routes for Journal Monitor.
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request, Depends, Form
+from fastapi import APIRouter, Request, Depends, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, func, desc, or_
+from sqlalchemy import select, func, desc, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -92,11 +92,14 @@ async def entries_page(
     sort: str = "published",
     page: int = 1,
     page_size: int = 10,
-    include_news: int = 0,
+    type_filter: list[str] | None = Query(None),
     subscription_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Recent entries page. Publicly accessible."""
+    from app.entry_type import VALID_ARTICLE_TYPES
+    from app.models import EntryType, EntryStructure
+    
     config = get_runtime_config()
     today_date = datetime.now(ZoneInfo(config.timezone)).date()
     if page < 1:
@@ -114,16 +117,44 @@ async def entries_page(
         except ValueError:
             subscription_id_value = None
 
+    # Parse type_filter from query params (can be multiple values)
+    type_filter_values = []
+    if type_filter:
+        # Handle both single value and list
+        if isinstance(type_filter, str):
+            type_filter_values = [type_filter] if type_filter in VALID_ARTICLE_TYPES else []
+        else:
+            type_filter_values = [t for t in type_filter if t in VALID_ARTICLE_TYPES]
+
     # Shared filters (apply to both count query and entries query)
     filters = []
-    if not include_news:
-        news_pattern = "%news%"
-        filters.append(
-            ~or_(
-                Entry.title.ilike(news_pattern),
-                Entry.subscription.has(Subscription.name.ilike(news_pattern)),
+    if type_filter_values:
+        # Filter by effective type, falling back to structured type if no EntryType exists.
+        type_filter_set = set(type_filter_values)
+        fallback_structured_types = [t for t in type_filter_values if t != "other"]
+        type_conditions = [
+            Entry.type_info.has(EntryType.effective_type.in_(type_filter_values))
+        ]
+        if fallback_structured_types:
+            type_conditions.append(
+                and_(
+                    ~Entry.type_info.has(),
+                    Entry.structured.has(
+                        EntryStructure.site_type.in_(fallback_structured_types)
+                    ),
+                )
             )
-        )
+        if "other" in type_filter_set:
+            type_conditions.append(
+                and_(~Entry.type_info.has(), ~Entry.structured.has())
+            )
+            type_conditions.append(
+                and_(
+                    ~Entry.type_info.has(),
+                    Entry.structured.has(EntryStructure.site_type == "other"),
+                )
+            )
+        filters.append(or_(*type_conditions))
     if subscription_id_value:
         filters.append(Entry.subscription_id == subscription_id_value)
 
@@ -137,7 +168,7 @@ async def entries_page(
 
     offset = (page - 1) * page_size
 
-    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content), selectinload(Entry.structured))
+    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content), selectinload(Entry.structured), selectinload(Entry.type_info))
     if filters:
         query = query.where(*filters)
     if sort == "journal":
@@ -176,7 +207,8 @@ async def entries_page(
             "page_size": page_size,
             "total_entries": total_entries,
             "total_pages": total_pages,
-            "include_news": bool(include_news),
+            "type_filter": type_filter_values,
+            "valid_types": sorted(VALID_ARTICLE_TYPES),
             "subscription_id": subscription_id_value,
             "subscriptions": subscriptions,
             "today_date": today_date,

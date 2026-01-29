@@ -72,6 +72,9 @@ class Entry(Base):
     structured: Mapped[Optional["EntryStructure"]] = relationship(
         "EntryStructure", back_populates="entry", uselist=False, cascade="all, delete-orphan"
     )
+    type_info: Mapped[Optional["EntryType"]] = relationship(
+        "EntryType", back_populates="entry", uselist=False, cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         # Unique constraint on fingerprint per subscription for deduplication
@@ -193,6 +196,56 @@ class EntryStructure(Base):
     __table_args__ = (
         # Index for querying by status
         Index("ix_entry_structures_status", "status"),
+    )
+
+
+class EntryType(Base):
+    """
+    Unified article type classification for an entry.
+    Stores parse-inferred, LLM-inferred, and user-overridden types,
+    along with a computed effective_type based on priority: user > llm > parse.
+    """
+
+    __tablename__ = "entry_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("entries.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+
+    # Effective (final) type - computed from user > llm > parse priority
+    effective_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="other"
+    )  # Enum: paper, journal, news, blog, docs, repository, forum, product, dataset, other
+
+    # Parse-inferred type (heuristic rules based on URL/content)
+    parse_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    parse_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parse_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # LLM-inferred type (from EntryStructure.site_type)
+    llm_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    llm_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    llm_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # User-overridden type (manual classification)
+    user_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    user_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    entry: Mapped["Entry"] = relationship("Entry", back_populates="type_info")
+
+    __table_args__ = (
+        # Index for querying/filtering by effective type
+        Index("ix_entry_types_effective_type", "effective_type"),
     )
 
 

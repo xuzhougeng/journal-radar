@@ -834,6 +834,17 @@ async def fetch_parse_for_entry(
             .on_conflict_do_nothing(index_elements=["entry_id"])
         )
         await db.execute(stmt)
+
+        # Infer and update parse type
+        from app.entry_type import update_parse_type
+        type_info = await update_parse_type(
+            db,
+            entry_id,
+            url=parse_result.final_url or entry.link,
+            title=parse_result.title,
+            text=truncated_text,
+        )
+
         await db.commit()
 
         return {
@@ -843,6 +854,8 @@ async def fetch_parse_for_entry(
             "text_length": len(truncated_text) if truncated_text else 0,
             "raw_path": parse_result.raw_path,
             "metadata": metadata,
+            "parse_type": type_info.parse_type,
+            "effective_type": type_info.effective_type,
         }
     except HTTPException:
         raise
@@ -1058,6 +1071,15 @@ async def struct_entry_with_llm(
             )
             await db.execute(stmt)
 
+        # Sync LLM type to EntryType
+        from app.entry_type import update_llm_type
+        type_info = await update_llm_type(
+            db,
+            entry_id,
+            llm_type=struct_result.site_type,
+            llm_reason=struct_result.site_type_reason,
+        )
+
         await db.commit()
 
         return {
@@ -1065,6 +1087,7 @@ async def struct_entry_with_llm(
             "entry_id": entry_id,
             "site_type": struct_result.site_type,
             "site_type_reason": struct_result.site_type_reason,
+            "effective_type": type_info.effective_type,
             "summary_length": len(struct_result.summary) if struct_result.summary else 0,
             "model": struct_result.model,
             "response_time_ms": round(struct_result.response_time_ms, 2),
@@ -1112,6 +1135,129 @@ async def get_llm_preview(
         "error_message": struct.error_message,
         "created_at": struct.created_at.isoformat() if struct.created_at else None,
         "updated_at": struct.updated_at.isoformat() if struct.updated_at else None,
+    }
+
+
+# =============================================================================
+# Entry Type API (unified classification)
+# =============================================================================
+
+@router.get("/entries/{entry_id}/type")
+async def get_entry_type(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Get all type information for an entry. Requires login."""
+    from sqlalchemy.orm import selectinload
+    from app.models import EntryType
+    from app.entry_type import VALID_ARTICLE_TYPES
+
+    # Get the entry with its type info
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.type_info))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    type_info = entry.type_info
+    return {
+        "entry_id": entry_id,
+        "entry_title": entry.title,
+        "effective_type": type_info.effective_type if type_info else "other",
+        "parse_type": type_info.parse_type if type_info else None,
+        "parse_reason": type_info.parse_reason if type_info else None,
+        "parse_updated_at": type_info.parse_updated_at.isoformat() if type_info and type_info.parse_updated_at else None,
+        "llm_type": type_info.llm_type if type_info else None,
+        "llm_reason": type_info.llm_reason if type_info else None,
+        "llm_updated_at": type_info.llm_updated_at.isoformat() if type_info and type_info.llm_updated_at else None,
+        "user_type": type_info.user_type if type_info else None,
+        "user_reason": type_info.user_reason if type_info else None,
+        "user_updated_at": type_info.user_updated_at.isoformat() if type_info and type_info.user_updated_at else None,
+        "valid_types": sorted(VALID_ARTICLE_TYPES),
+    }
+
+
+class UpdateTypeRequest(BaseModel):
+    user_type: str
+    user_reason: Optional[str] = None
+
+
+@router.patch("/entries/{entry_id}/type")
+async def update_entry_type(
+    request: Request,
+    entry_id: int,
+    data: UpdateTypeRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Set user-overridden type for an entry. Requires login."""
+    from app.entry_type import update_user_type, VALID_ARTICLE_TYPES
+
+    # Check entry exists
+    result = await db.execute(select(Entry).where(Entry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    # Validate type
+    if data.user_type not in VALID_ARTICLE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid type '{data.user_type}'. Must be one of: {', '.join(sorted(VALID_ARTICLE_TYPES))}"
+        )
+
+    try:
+        type_info = await update_user_type(
+            db,
+            entry_id,
+            user_type=data.user_type,
+            user_reason=data.user_reason,
+        )
+        await db.commit()
+
+        return {
+            "status": "success",
+            "entry_id": entry_id,
+            "user_type": type_info.user_type,
+            "user_reason": type_info.user_reason,
+            "effective_type": type_info.effective_type,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/entries/{entry_id}/type/user")
+async def clear_user_type(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Clear user-overridden type for an entry. Requires login."""
+    from app.entry_type import update_user_type
+
+    # Check entry exists
+    result = await db.execute(select(Entry).where(Entry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    type_info = await update_user_type(
+        db,
+        entry_id,
+        user_type=None,
+        user_reason=None,
+    )
+    await db.commit()
+
+    return {
+        "status": "success",
+        "entry_id": entry_id,
+        "user_type": None,
+        "effective_type": type_info.effective_type,
     }
 
 
