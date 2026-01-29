@@ -8,15 +8,15 @@
     <div class="page-actions">
         {% if include_news %}
             {% if subscription_id %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Hide news</a>
+                <a class="btn" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Hide news</a>
             {% else %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size) }}">Hide news</a>
+                <a class="btn" href="{{ request.url.include_query_params(include_news=0, page=1, sort=sort, page_size=page_size) }}">Hide news</a>
             {% endif %}
         {% else %}
             {% if subscription_id %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Show news</a>
+                <a class="btn" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size, subscription_id=subscription_id) }}">Show news</a>
             {% else %}
-                <a class="btn btn-sm" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size) }}">Show news</a>
+                <a class="btn" href="{{ request.url.include_query_params(include_news=1, page=1, sort=sort, page_size=page_size) }}">Show news</a>
             {% endif %}
         {% endif %}
         <form method="get" action="/entries" class="sort-form">
@@ -77,13 +77,24 @@
                 </span>
             {% endif %}
             <span class="entry-fetched">Fetched: {{ entry.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
-            {% if exa_configured and logged_in %}
+            <div style="flex: 1;"></div> <!-- Spacer -->
+            {% if parse_enabled and logged_in %}
                 {% if entry.content %}
-                    <span class="badge badge-exa" title="Exa content: {{ entry.content.text|length if entry.content.text else 0 }} chars">Exa ✓</span>
-                    <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }})" title="Preview Exa content">Preview</button>
+                    <span class="badge badge-parse" title="Content via {{ entry.content.provider }}: {{ entry.content.text|length if entry.content.text else 0 }} chars">Parse ✓ ({{ entry.content.provider }})</span>
+                    {% if llm_configured %}
+                        {% if entry.structured %}
+                            <span class="badge badge-llm" title="Type: {{ entry.structured.site_type }}">LLM ✓</span>
+                        {% else %}
+                            <button class="btn btn-xs btn-llm" onclick="fetchLlm({{ entry.id }}, this)" title="Extract structure via LLM">LLM</button>
+                        {% endif %}
+                    {% endif %}
+                    <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }}, {{ 'true' if entry.structured else 'false' }})" title="Preview content">Preview</button>
                 {% else %}
-                    <button class="btn btn-xs btn-exa" onclick="fetchExa({{ entry.id }}, this)" title="Fetch content via Exa AI">Exa</button>
-                    <button class="btn btn-xs btn-preview" disabled title="Fetch Exa content first to enable preview">Preview</button>
+                    <button class="btn btn-xs btn-parse" onclick="fetchParse({{ entry.id }}, this)" title="Fetch content via parse providers">Parse</button>
+                    {% if llm_configured %}
+                        <button class="btn btn-xs btn-llm" disabled title="Fetch content first">LLM</button>
+                    {% endif %}
+                    <button class="btn btn-xs btn-preview" disabled title="Fetch content first to enable preview">Preview</button>
                 {% endif %}
             {% endif %}
         </div>
@@ -146,32 +157,61 @@ marked.setOptions({
     gfm: true,     // GitHub Flavored Markdown
 });
 
-async function fetchExa(entryId, btn) {
+async function fetchParse(entryId, btn) {
     btn.disabled = true;
     btn.textContent = '...';
     try {
-        const data = await apiCall(`/api/exa/fetch/${entryId}`, { method: 'POST' });
-        btn.textContent = 'Exa ✓';
-        btn.className = 'badge badge-exa';
+        const data = await apiCall(`/api/parse/fetch/${entryId}`, { method: 'POST' });
+        btn.textContent = `Parse ✓ (${data.provider})`;
+        btn.className = 'badge badge-parse';
         btn.onclick = null;
-        btn.title = `Exa content: ${data.text_length} chars`;
+        btn.title = `Content via ${data.provider}: ${data.text_length} chars`;
 
-        // Enable the Preview button next to it
-        const previewBtn = btn.nextElementSibling;
+        // Enable the LLM button next to it (if present)
+        const llmBtn = btn.nextElementSibling;
+        if (llmBtn && llmBtn.classList.contains('btn-llm')) {
+            llmBtn.disabled = false;
+            llmBtn.onclick = () => fetchLlm(entryId, llmBtn);
+            llmBtn.title = 'Extract structure via LLM';
+        }
+
+        // Enable the Preview button
+        const previewBtn = llmBtn ? llmBtn.nextElementSibling : btn.nextElementSibling;
         if (previewBtn && previewBtn.classList.contains('btn-preview')) {
             previewBtn.disabled = false;
-            previewBtn.onclick = () => openPreview(entryId);
-            previewBtn.title = 'Preview Exa content';
+            previewBtn.onclick = () => openPreview(entryId, false);
+            previewBtn.title = 'Preview content';
         }
     } catch (error) {
         btn.disabled = false;
-        btn.textContent = 'Exa';
+        btn.textContent = 'Parse';
         alert('Failed to fetch: ' + error.message);
     }
 }
 
+// Legacy alias for backward compatibility
+async function fetchExa(entryId, btn) {
+    return fetchParse(entryId, btn);
+}
+
+async function fetchLlm(entryId, btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {
+        const data = await apiCall(`/api/llm/struct/${entryId}`, { method: 'POST' });
+        btn.textContent = 'LLM ✓';
+        btn.className = 'badge badge-llm';
+        btn.onclick = null;
+        btn.title = `Type: ${data.site_type}`;
+    } catch (error) {
+        btn.disabled = false;
+        btn.textContent = 'LLM';
+        alert('Failed to extract: ' + error.message);
+    }
+}
+
 // Preview drawer functions
-async function openPreview(entryId) {
+async function openPreview(entryId, hasStructured = false) {
     const backdrop = document.getElementById('preview-backdrop');
     const drawer = document.getElementById('preview-drawer');
     const content = document.getElementById('preview-content');
@@ -185,51 +225,138 @@ async function openPreview(entryId) {
     document.body.style.overflow = 'hidden';
 
     try {
-        const data = await apiCall(`/api/entries/${entryId}/exa/preview`);
-        title.textContent = data.entry_title || 'Preview';
+        // Fetch parsed content
+        const parseData = await apiCall(`/api/entries/${entryId}/parse/preview`);
+        title.textContent = parseData.entry_title || 'Preview';
 
-        if (data.results && data.results.length > 0) {
-            const result = data.results[0];
-            content.innerHTML = renderPreviewContent(result, data);
-        } else {
-            content.innerHTML = '<div class="preview-error">No results available</div>';
+        // Try to fetch LLM structured info (if available)
+        let llmData = null;
+        try {
+            llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
+        } catch (e) {
+            // LLM data not available, that's fine
         }
+
+        content.innerHTML = renderPreviewContent(parseData, llmData, entryId);
     } catch (error) {
         title.textContent = 'Error';
         content.innerHTML = `<div class="preview-error">Failed to load preview: ${error.message}</div>`;
     }
 }
 
-function renderPreviewContent(result, data) {
-    let html = '<div class="preview-meta">';
+function renderPreviewContent(parseData, llmData, entryId) {
+    let html = '';
 
-    if (result.title) {
-        html += `<div class="preview-meta-item"><strong>Title:</strong> ${escapeHtml(result.title)}</div>`;
-    }
-    if (result.url) {
-        html += `<div class="preview-meta-item"><strong>URL:</strong> <a href="${escapeHtml(result.url)}" target="_blank">${escapeHtml(result.url)}</a></div>`;
-    }
-    if (result.author) {
-        html += `<div class="preview-meta-item"><strong>Author:</strong> ${escapeHtml(result.author)}</div>`;
-    }
-    if (data.cost_dollars && data.cost_dollars.total !== undefined) {
-        html += `<div class="preview-meta-item"><strong>Cost:</strong> $${data.cost_dollars.total.toFixed(4)}</div>`;
-    }
-    if (data.search_time !== undefined) {
-        html += `<div class="preview-meta-item"><strong>Fetch time:</strong> ${data.search_time.toFixed(0)}ms</div>`;
+    // LLM Structured Summary section (if available)
+    if (llmData) {
+        html += '<div class="preview-section preview-structured">';
+        html += '<div class="preview-section-header">';
+        html += '<span class="preview-text-header">Structured Summary</span>';
+        html += `<button class="btn btn-xs" onclick="rerunLlm(${entryId})" title="Re-run LLM extraction">Re-run</button>`;
+        html += '</div>';
+        html += '<div class="preview-meta">';
+        html += `<div class="preview-meta-item"><strong>Site Type:</strong> <span class="badge badge-type badge-type-${llmData.site_type}">${llmData.site_type}</span>`;
+        if (llmData.site_type_reason) {
+            html += ` <span class="hint">(${escapeHtml(llmData.site_type_reason)})</span>`;
+        }
+        html += '</div>';
+        if (llmData.model) {
+            html += `<div class="preview-meta-item"><strong>Model:</strong> ${escapeHtml(llmData.model)}</div>`;
+        }
+        html += '</div>';
+        if (llmData.summary) {
+            html += `<div class="preview-summary preview-markdown">${marked.parse(llmData.summary)}</div>`;
+        }
+        html += '</div>';
+    } else {
+        // Show button to generate structured info
+        html += '<div class="preview-section preview-structured-empty">';
+        html += '<div class="preview-text-header">Structured Summary</div>';
+        html += `<p class="hint">No structured info available. <button class="btn btn-xs btn-llm" onclick="generateLlmInPreview(${entryId})">Generate with LLM</button></p>`;
+        html += '</div>';
     }
 
+    // Content Metadata section
+    html += '<div class="preview-section">';
+    html += '<div class="preview-text-header">Page Metadata</div>';
+    html += '<div class="preview-meta">';
+    html += `<div class="preview-meta-item"><strong>Provider:</strong> <span class="badge badge-provider">${escapeHtml(parseData.provider || 'unknown')}</span></div>`;
+    if (parseData.title) {
+        html += `<div class="preview-meta-item"><strong>Title:</strong> ${escapeHtml(parseData.title)}</div>`;
+    }
+    if (parseData.url) {
+        html += `<div class="preview-meta-item"><strong>URL:</strong> <a href="${escapeHtml(parseData.url)}" target="_blank">${escapeHtml(parseData.url)}</a></div>`;
+    }
+    if (parseData.author) {
+        html += `<div class="preview-meta-item"><strong>Author:</strong> ${escapeHtml(parseData.author)}</div>`;
+    }
+    
+    // Provider-specific metadata
+    if (parseData.raw_data) {
+        if (parseData.provider === 'exa' && parseData.raw_data.cost_dollars) {
+            html += `<div class="preview-meta-item"><strong>Cost:</strong> $${parseData.raw_data.cost_dollars.total.toFixed(4)}</div>`;
+        }
+        if (parseData.raw_data.search_time !== undefined) {
+            html += `<div class="preview-meta-item"><strong>Fetch time:</strong> ${parseData.raw_data.search_time.toFixed(0)}ms</div>`;
+        }
+        if (parseData.provider === 'direct' && parseData.raw_data.html_length) {
+            html += `<div class="preview-meta-item"><strong>HTML size:</strong> ${parseData.raw_data.html_length.toLocaleString()} chars</div>`;
+        }
+    }
+    html += '</div>';
     html += '</div>';
 
-    html += '<div class="preview-text-header">Content</div>';
-    if (result.text) {
+    // Full Content section
+    html += '<div class="preview-section">';
+    html += '<div class="preview-text-header">Full Content</div>';
+    if (parseData.text) {
         // Render text as Markdown
-        html += `<div class="preview-text preview-markdown">${marked.parse(result.text)}</div>`;
+        html += `<div class="preview-text preview-markdown">${marked.parse(parseData.text)}</div>`;
     } else {
         html += '<div class="preview-text preview-empty">No text content available</div>';
     }
+    html += '</div>';
 
     return html;
+}
+
+async function generateLlmInPreview(entryId) {
+    const content = document.getElementById('preview-content');
+    const originalHtml = content.innerHTML;
+    
+    // Update to show loading in the structured section
+    const structuredSection = content.querySelector('.preview-structured-empty');
+    if (structuredSection) {
+        structuredSection.innerHTML = '<div class="preview-text-header">Structured Summary</div><p class="hint">Generating...</p>';
+    }
+    
+    try {
+        await apiCall(`/api/llm/struct/${entryId}`, { method: 'POST' });
+        // Refresh the preview
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to generate: ' + error.message);
+        content.innerHTML = originalHtml;
+    }
+}
+
+async function rerunLlm(entryId) {
+    if (!confirm('Re-run LLM extraction? This will overwrite the existing structure.')) return;
+    
+    const content = document.getElementById('preview-content');
+    const structuredSection = content.querySelector('.preview-structured');
+    if (structuredSection) {
+        structuredSection.innerHTML = '<div class="preview-text-header">Structured Summary</div><p class="hint">Re-generating...</p>';
+    }
+    
+    try {
+        await apiCall(`/api/llm/struct/${entryId}?force=true`, { method: 'POST' });
+        // Refresh the preview
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to re-run: ' + error.message);
+        openPreview(entryId, true);
+    }
 }
 
 function escapeHtml(text) {

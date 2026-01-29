@@ -23,11 +23,17 @@ templates = Jinja2Templates(directory="app/web/templates")
 
 
 @router.get("/", response_class=HTMLResponse)
-async def home(request: Request, db: AsyncSession = Depends(get_db)):
-    """Home page with dashboard. Redirects to /login if not logged in."""
+async def home():
+    """Home page redirects to entries."""
+    return RedirectResponse(url="/entries", status_code=302)
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
+    """Dashboard page. Redirects to /login if not logged in."""
     # If not logged in, redirect to login page
     if not is_logged_in(request):
-        return RedirectResponse(url="/login?next=/", status_code=302)
+        return RedirectResponse(url="/login?next=/dashboard", status_code=302)
 
     config = get_runtime_config()
 
@@ -131,7 +137,7 @@ async def entries_page(
 
     offset = (page - 1) * page_size
 
-    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content))
+    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content), selectinload(Entry.structured))
     if filters:
         query = query.where(*filters)
     if sort == "journal":
@@ -158,6 +164,8 @@ async def entries_page(
     subscriptions_result = await db.execute(select(Subscription).order_by(Subscription.name))
     subscriptions = subscriptions_result.scalars().all()
 
+    from app.parse import is_parse_enabled
+
     return templates.TemplateResponse(
         "entries.html",
         {
@@ -172,7 +180,8 @@ async def entries_page(
             "subscription_id": subscription_id_value,
             "subscriptions": subscriptions,
             "today_date": today_date,
-            "exa_configured": bool(config.exa_api_key),
+            "parse_enabled": is_parse_enabled(),
+            "llm_configured": bool(config.llm_api_key),
             "logged_in": is_logged_in(request),
         },
     )
@@ -194,13 +203,14 @@ async def settings_page(request: Request):
             "settings": config,
             "bark_configured": bool(config.bark_device_key),
             "exa_configured": bool(config.exa_api_key),
+            "llm_configured": bool(config.llm_api_key),
             "logged_in": True,
         },
     )
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: str = "/"):
+async def login_page(request: Request, next: str = "/entries"):
     """Login page."""
     # If already logged in, redirect to next
     if is_logged_in(request):
@@ -222,7 +232,7 @@ async def login_submit(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
-    next: str = Form("/"),
+    next: str = Form("/entries"),
 ):
     """Handle login form submission."""
     if verify_credentials(username, password):
@@ -238,7 +248,9 @@ async def login_submit(
             "error": "Invalid username or password",
             "logged_in": False,
         },
-        status_code=401,
+        # Important: keep this as 200 so browsers render the login page with an
+        # inline error message, instead of treating it like an auth challenge.
+        status_code=200,
     )
 
 

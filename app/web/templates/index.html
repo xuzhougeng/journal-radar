@@ -39,25 +39,27 @@
     </div>
 </div>
 
-<div class="card">
-    <h2>Schedule</h2>
-    <div class="schedule-info">
-        <p><strong>Check Time:</strong> {{ settings.check_hour }}:{{ "%02d"|format(settings.check_minute) }} ({{ settings.timezone }})</p>
-        {% if next_run %}
-            <p><strong>Next Run:</strong> {{ next_run }}</p>
-        {% endif %}
-        {% if last_run %}
-            <p><strong>Last Run:</strong> {{ last_run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
-        {% endif %}
+<div class="dashboard-bottom-grid">
+    <div class="card">
+        <h2>Schedule</h2>
+        <div class="schedule-info">
+            <p><strong>Check Time:</strong> {{ settings.check_hour }}:{{ "%02d"|format(settings.check_minute) }} ({{ settings.timezone }})</p>
+            {% if next_run %}
+                <p><strong>Next Run:</strong> {{ next_run }}</p>
+            {% endif %}
+            {% if last_run %}
+                <p><strong>Last Run:</strong> {{ last_run.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            {% endif %}
+        </div>
     </div>
-</div>
 
-<div class="card">
-    <h2>Quick Actions</h2>
-    <div class="actions">
-        <a href="/subscriptions" class="btn">Manage Subscriptions</a>
-        <a href="/entries" class="btn">View Entries</a>
-        <button class="btn" onclick="testPush()">Test Push Notification</button>
+    <div class="card">
+        <h2>Quick Actions</h2>
+        <div class="actions">
+            <a href="/subscriptions" class="btn">Manage Subscriptions</a>
+            <a href="/entries" class="btn">View Entries</a>
+            <button class="btn" onclick="testPush()">Test Push Notification</button>
+        </div>
     </div>
 </div>
 

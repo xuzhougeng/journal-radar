@@ -81,6 +81,15 @@ class SettingsResponse(BaseModel):
     # Exa
     exa_configured: bool
     exa_text_max_chars: int
+    # Parse/Content fetching
+    parse_providers_order: list[str]
+    parse_min_text_chars: int
+    # LLM
+    llm_configured: bool
+    llm_base_url: str
+    llm_model: str
+    llm_timeout: int
+    llm_max_input_chars: int
     # Schedule
     check_hour: int
     check_minute: int
@@ -103,6 +112,15 @@ class SettingsUpdate(BaseModel):
     # Exa
     exa_api_key: Optional[str] = None
     exa_text_max_chars: Optional[int] = Field(default=None, ge=1000, le=500000)
+    # Parse/Content fetching
+    parse_providers_order: Optional[list[str]] = None
+    parse_min_text_chars: Optional[int] = Field(default=None, ge=0, le=10000)
+    # LLM
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_timeout: Optional[int] = Field(default=None, ge=10, le=300)
+    llm_max_input_chars: Optional[int] = Field(default=None, ge=1000, le=100000)
     # Schedule
     check_hour: Optional[int] = Field(default=None, ge=0, le=23)
     check_minute: Optional[int] = Field(default=None, ge=0, le=59)
@@ -144,6 +162,13 @@ async def get_settings(
         bark_server_url=config.bark_server_url,
         exa_configured=bool(config.exa_api_key),
         exa_text_max_chars=config.exa_text_max_chars,
+        parse_providers_order=config.parse_providers_order,
+        parse_min_text_chars=config.parse_min_text_chars,
+        llm_configured=bool(config.llm_api_key),
+        llm_base_url=config.llm_base_url,
+        llm_model=config.llm_model,
+        llm_timeout=config.llm_timeout,
+        llm_max_input_chars=config.llm_max_input_chars,
         check_hour=config.check_hour,
         check_minute=config.check_minute,
         timezone=config.timezone,
@@ -179,6 +204,28 @@ async def update_settings(
         updates["exa_api_key"] = data.exa_api_key if data.exa_api_key else None
     if data.exa_text_max_chars is not None:
         updates["exa_text_max_chars"] = data.exa_text_max_chars
+    if data.parse_providers_order is not None:
+        # Validate providers
+        valid_providers = {"exa", "direct"}
+        for p in data.parse_providers_order:
+            if p not in valid_providers:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid provider: {p}. Valid providers: {', '.join(valid_providers)}"
+                )
+        updates["parse_providers_order"] = data.parse_providers_order
+    if data.parse_min_text_chars is not None:
+        updates["parse_min_text_chars"] = data.parse_min_text_chars
+    if data.llm_api_key is not None:
+        updates["llm_api_key"] = data.llm_api_key if data.llm_api_key else None
+    if data.llm_base_url is not None:
+        updates["llm_base_url"] = data.llm_base_url
+    if data.llm_model is not None:
+        updates["llm_model"] = data.llm_model
+    if data.llm_timeout is not None:
+        updates["llm_timeout"] = data.llm_timeout
+    if data.llm_max_input_chars is not None:
+        updates["llm_max_input_chars"] = data.llm_max_input_chars
     if data.check_hour is not None:
         updates["check_hour"] = data.check_hour
         schedule_changed = True
@@ -592,12 +639,47 @@ async def test_push(
         raise HTTPException(status_code=500, detail="Failed to send notification")
 
 
+@router.post("/parse/test")
+async def test_parse(
+    request: Request,
+    _: None = Depends(require_login_api),
+):
+    """Test parse providers with a sample URL. Requires login."""
+    from app.parse import fetch_content_with_fallback, is_parse_enabled
+
+    config = get_runtime_config()
+
+    if not is_parse_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail="No parse providers enabled. Configure Exa API key or enable direct fetch in Settings.",
+        )
+
+    test_url = "https://example.com/"
+    results = await fetch_content_with_fallback([test_url])
+
+    if results and test_url in results:
+        result = results[test_url]
+        return {
+            "status": "success" if result.success else "failed",
+            "provider": result.provider,
+            "url": result.final_url or result.url,
+            "title": result.title,
+            "text_length": len(result.text) if result.text else 0,
+            "raw_path": result.raw_path,
+            "error": result.error,
+            "metadata": result.metadata,
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to fetch content from any provider")
+
+
 @router.post("/exa/test")
 async def test_exa(
     request: Request,
     _: None = Depends(require_login_api),
 ):
-    """Test Exa AI API with a sample URL. Requires login."""
+    """Test Exa AI API with a sample URL. Requires login. (Deprecated: use /api/parse/test)"""
     config = get_runtime_config()
     
     if not config.exa_api_key:
@@ -615,6 +697,9 @@ async def test_exa(
         exa_result = result.results[0]
         return {
             "status": "success",
+            "provider": "exa",
+            "deprecated": True,
+            "message": "Use /api/parse/test instead",
             "request_id": result.request_id,
             "url": exa_result.url,
             "title": exa_result.title,
@@ -627,26 +712,50 @@ async def test_exa(
         raise HTTPException(status_code=500, detail="Failed to fetch content from Exa API")
 
 
-@router.post("/exa/fetch/{entry_id}")
-async def fetch_exa_for_entry(
+@router.post("/llm/test")
+async def test_llm(
+    request: Request,
+    _: None = Depends(require_login_api),
+):
+    """Test LLM API connection. Requires login."""
+    config = get_runtime_config()
+    
+    if not config.llm_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="LLM API key not configured. Update it in Settings.",
+        )
+
+    from app.llm_struct import test_llm_connection
+
+    try:
+        result = await test_llm_connection()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM test failed: {str(e)}")
+
+
+@router.post("/parse/fetch/{entry_id}")
+async def fetch_parse_for_entry(
     request: Request,
     entry_id: int,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_login_api),
 ):
-    """Manually fetch Exa content for a specific entry. Requires login."""
+    """Manually fetch content for a specific entry using parse providers with fallback. Requires login."""
     import logging
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from app.exa_ai import fetch_contents, truncate_text
+    from app.parse import fetch_content_with_fallback, is_parse_enabled
+    from app.parse.runner import truncate_text
     from app.models import EntryContent
 
     logger = logging.getLogger(__name__)
     config = get_runtime_config()
 
-    if not config.exa_api_key:
+    if not is_parse_enabled():
         raise HTTPException(
             status_code=400,
-            detail="Exa API key not configured. Update it in Settings.",
+            detail="No parse providers enabled. Configure Exa API key or enable direct fetch in Settings.",
         )
 
     # Get the entry
@@ -660,45 +769,49 @@ async def fetch_exa_for_entry(
         select(EntryContent).where(EntryContent.entry_id == entry_id)
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Exa content already exists for this entry")
+        raise HTTPException(status_code=400, detail="Content already exists for this entry")
 
     try:
-        # Fetch from Exa
-        exa_response = await fetch_contents([entry.link])
-        if not exa_response:
-            raise HTTPException(status_code=502, detail=f"Exa API returned no response for URL: {entry.link}")
+        # Fetch with fallback
+        parse_results = await fetch_content_with_fallback([entry.link])
 
-        # Check for errors in response
-        if exa_response.errors:
-            error = exa_response.errors[0]
-            error_msg = error.error_tag or "unknown error"
+        if not parse_results or entry.link not in parse_results:
+            raise HTTPException(status_code=502, detail=f"No parse result for URL: {entry.link}")
+
+        parse_result = parse_results[entry.link]
+
+        # Check if successful and meets threshold
+        if not parse_result.success:
             raise HTTPException(
                 status_code=502,
-                detail=f"Exa crawl failed ({error_msg}): {entry.link}"
+                detail=f"Parse failed ({parse_result.provider}): {parse_result.error or 'unknown error'}"
             )
 
-        if not exa_response.results:
-            raise HTTPException(status_code=502, detail=f"Exa API returned empty results for URL: {entry.link}")
+        if not parse_result.meets_threshold(config.parse_min_text_chars):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Extracted text too short ({len(parse_result.text or '')} chars, min: {config.parse_min_text_chars})"
+            )
 
-        exa_result = exa_response.results[0]
-        truncated_text = truncate_text(exa_result.text)
+        truncated_text = truncate_text(parse_result.text)
+        metadata = parse_result.metadata or {}
 
         # Save to database
         stmt = (
             sqlite_insert(EntryContent)
             .values(
                 entry_id=entry_id,
-                provider="exa",
-                request_id=exa_response.request_id,
-                status=exa_result.status,
-                url=exa_result.url,
-                title=exa_result.title,
-                author=exa_result.author,
+                provider=parse_result.provider,
+                request_id=metadata.get("request_id"),
+                status=parse_result.status,
+                url=parse_result.final_url,
+                title=parse_result.title,
+                author=parse_result.author,
                 text=truncated_text,
-                raw_path=exa_response.raw_path,
-                cost_total=exa_response.cost_total,
-                cost_text=exa_response.cost_text,
-                search_time_ms=exa_response.search_time_ms,
+                raw_path=parse_result.raw_path,
+                cost_total=metadata.get("cost_total"),
+                cost_text=metadata.get("cost_text"),
+                search_time_ms=metadata.get("search_time_ms"),
             )
             .on_conflict_do_nothing(index_elements=["entry_id"])
         )
@@ -708,26 +821,41 @@ async def fetch_exa_for_entry(
         return {
             "status": "success",
             "entry_id": entry_id,
-            "request_id": exa_response.request_id,
+            "provider": parse_result.provider,
             "text_length": len(truncated_text) if truncated_text else 0,
-            "cost_total": exa_response.cost_total,
-            "search_time_ms": exa_response.search_time_ms,
+            "raw_path": parse_result.raw_path,
+            "metadata": metadata,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Exa fetch failed for entry {entry_id} ({entry.link}): {e}")
-        raise HTTPException(status_code=500, detail=f"Exa fetch failed: {str(e)}")
+        logger.error(f"Parse fetch failed for entry {entry_id} ({entry.link}): {e}")
+        raise HTTPException(status_code=500, detail=f"Parse fetch failed: {str(e)}")
 
 
-@router.get("/entries/{entry_id}/exa/preview")
-async def get_exa_preview(
+@router.post("/exa/fetch/{entry_id}")
+async def fetch_exa_for_entry(
     request: Request,
     entry_id: int,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_login_api),
 ):
-    """Get Exa raw content for preview sidebar. Requires login."""
+    """Manually fetch content for a specific entry. (Deprecated: use /api/parse/fetch/{entry_id})"""
+    # Redirect to the new parse endpoint
+    result = await fetch_parse_for_entry(request, entry_id, db, _)
+    result["deprecated"] = True
+    result["message"] = "Use /api/parse/fetch/{entry_id} instead"
+    return result
+
+
+@router.get("/entries/{entry_id}/parse/preview")
+async def get_parse_preview(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Get parsed content for preview sidebar. Supports multiple providers. Requires login."""
     from pathlib import Path
     from sqlalchemy.orm import selectinload
     from app.models import EntryContent
@@ -741,40 +869,231 @@ async def get_exa_preview(
         raise HTTPException(status_code=404, detail="Entry not found")
 
     if not entry.content:
-        raise HTTPException(status_code=404, detail="No Exa content available for this entry. Fetch it first.")
+        raise HTTPException(status_code=404, detail="No content available for this entry. Fetch it first.")
 
-    if not entry.content.raw_path:
-        raise HTTPException(status_code=404, detail="Raw Exa data file path not recorded")
+    provider = entry.content.provider
+    raw_path = entry.content.raw_path
 
-    # Security: only use the filename, not the full path from DB
-    raw_filename = Path(entry.content.raw_path).name
-    raw_file_path = StaticConfig.get_exa_data_dir() / raw_filename
-
-    if not raw_file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Raw Exa data file not found: {raw_filename}"
-        )
-
-    try:
-        with open(raw_file_path, "r", encoding="utf-8") as f:
-            raw_data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse Exa JSON: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read Exa file: {e}")
-
-    # Return the raw data structure with metadata
-    return {
+    # Base response
+    response = {
         "entry_id": entry_id,
         "entry_title": entry.title,
         "entry_link": entry.link,
-        "request_id": raw_data.get("requestId"),
-        "results": raw_data.get("results", []),
-        "statuses": raw_data.get("statuses", []),
-        "cost_dollars": raw_data.get("costDollars"),
-        "search_time": raw_data.get("searchTime"),
-        "raw_path": entry.content.raw_path,
+        "provider": provider,
+        "text": entry.content.text,
+        "title": entry.content.title,
+        "author": entry.content.author,
+        "url": entry.content.url,
+        "raw_path": raw_path,
+    }
+
+    # Try to load raw data if available
+    if raw_path:
+        raw_filename = Path(raw_path).name
+        
+        # Determine the correct data directory based on provider
+        if provider == "exa":
+            # Try new path first, then legacy path
+            raw_file_path = StaticConfig.get_parse_data_dir("exa") / raw_filename
+            if not raw_file_path.exists():
+                raw_file_path = StaticConfig.get_exa_data_dir() / raw_filename
+        elif provider == "direct":
+            raw_file_path = StaticConfig.get_parse_data_dir("direct") / raw_filename
+        else:
+            raw_file_path = None
+
+        if raw_file_path and raw_file_path.exists():
+            try:
+                with open(raw_file_path, "r", encoding="utf-8") as f:
+                    raw_data = json.load(f)
+                
+                # Provider-specific raw data formatting
+                if provider == "exa":
+                    response["raw_data"] = {
+                        "request_id": raw_data.get("requestId"),
+                        "results": raw_data.get("results", []),
+                        "statuses": raw_data.get("statuses", []),
+                        "cost_dollars": raw_data.get("costDollars"),
+                        "search_time": raw_data.get("searchTime"),
+                    }
+                elif provider == "direct":
+                    response["raw_data"] = {
+                        "url": raw_data.get("url"),
+                        "final_url": raw_data.get("final_url"),
+                        "fetched_at": raw_data.get("fetched_at"),
+                        "status_code": raw_data.get("status_code"),
+                        "content_type": raw_data.get("content_type"),
+                        "html_length": len(raw_data.get("html", "")),
+                    }
+                else:
+                    response["raw_data"] = raw_data
+            except Exception as e:
+                response["raw_data_error"] = str(e)
+
+    return response
+
+
+@router.get("/entries/{entry_id}/exa/preview")
+async def get_exa_preview(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Get content for preview sidebar. (Deprecated: use /api/entries/{entry_id}/parse/preview)"""
+    # Redirect to new endpoint
+    result = await get_parse_preview(request, entry_id, db, _)
+    result["deprecated"] = True
+    result["message"] = "Use /api/entries/{entry_id}/parse/preview instead"
+    return result
+
+
+@router.post("/llm/struct/{entry_id}")
+async def struct_entry_with_llm(
+    request: Request,
+    entry_id: int,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """
+    Manually trigger LLM structured extraction for a specific entry.
+    Requires login.
+    
+    Args:
+        entry_id: The entry ID to process.
+        force: If true, overwrite existing structure. Default false.
+    """
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from app.llm_struct import is_llm_enabled, extract_structured_info
+    from app.models import EntryContent, EntryStructure
+
+    config = get_runtime_config()
+
+    if not config.llm_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="LLM API key not configured. Update it in Settings.",
+        )
+
+    # Get the entry with its content
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.content))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    if not entry.content:
+        raise HTTPException(
+            status_code=400,
+            detail="No Exa content available for this entry. Fetch Exa content first."
+        )
+
+    # Check if structure already exists
+    existing_result = await db.execute(
+        select(EntryStructure).where(EntryStructure.entry_id == entry_id)
+    )
+    existing = existing_result.scalar_one_or_none()
+    
+    if existing and not force:
+        raise HTTPException(
+            status_code=400,
+            detail="LLM structure already exists for this entry. Use force=true to overwrite."
+        )
+
+    try:
+        # Extract structured info
+        struct_result = await extract_structured_info(
+            title=entry.content.title,
+            url=entry.content.url,
+            text=entry.content.text,
+        )
+
+        if existing:
+            # Update existing
+            existing.model = struct_result.model
+            existing.base_url = config.llm_base_url
+            existing.site_type = struct_result.site_type
+            existing.site_type_reason = struct_result.site_type_reason
+            existing.summary = struct_result.summary
+            existing.raw_json = struct_result.raw_json
+            existing.status = "success"
+            existing.error_message = None
+        else:
+            # Insert new
+            stmt = (
+                sqlite_insert(EntryStructure)
+                .values(
+                    entry_id=entry_id,
+                    provider="openai_compatible",
+                    model=struct_result.model,
+                    base_url=config.llm_base_url,
+                    site_type=struct_result.site_type,
+                    site_type_reason=struct_result.site_type_reason,
+                    summary=struct_result.summary,
+                    raw_json=struct_result.raw_json,
+                    status="success",
+                )
+                .on_conflict_do_nothing(index_elements=["entry_id"])
+            )
+            await db.execute(stmt)
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "entry_id": entry_id,
+            "site_type": struct_result.site_type,
+            "site_type_reason": struct_result.site_type_reason,
+            "summary_length": len(struct_result.summary) if struct_result.summary else 0,
+            "model": struct_result.model,
+            "response_time_ms": round(struct_result.response_time_ms, 2),
+            "force": force,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM extraction failed: {str(e)}")
+
+
+@router.get("/entries/{entry_id}/llm/preview")
+async def get_llm_preview(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Get LLM structured information for preview sidebar. Requires login."""
+    from sqlalchemy.orm import selectinload
+    from app.models import EntryStructure
+
+    # Get the entry with its structure
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.structured))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    if not entry.structured:
+        raise HTTPException(
+            status_code=404,
+            detail="No LLM structure available for this entry. Generate it first."
+        )
+
+    struct = entry.structured
+    return {
+        "entry_id": entry_id,
+        "entry_title": entry.title,
+        "site_type": struct.site_type,
+        "site_type_reason": struct.site_type_reason,
+        "summary": struct.summary,
+        "model": struct.model,
+        "provider": struct.provider,
+        "status": struct.status,
+        "error_message": struct.error_message,
+        "created_at": struct.created_at.isoformat() if struct.created_at else None,
+        "updated_at": struct.updated_at.isoformat() if struct.updated_at else None,
     }
 
 
@@ -786,6 +1105,7 @@ async def get_status(
 ):
     """Get current system status. Requires login."""
     from app.scheduler import get_next_run_time
+    from app.parse import is_parse_enabled
     from sqlalchemy import func
 
     config = get_runtime_config()
@@ -803,6 +1123,9 @@ async def get_status(
         "entries": entry_count or 0,
         "bark_configured": bool(config.bark_device_key),
         "exa_configured": bool(config.exa_api_key),
+        "parse_enabled": is_parse_enabled(),
+        "parse_providers": config.parse_providers_order,
+        "llm_configured": bool(config.llm_api_key),
         "next_run": get_next_run_time(),
         "last_run": {
             "id": last_run.id,

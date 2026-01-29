@@ -33,26 +33,83 @@
     </form>
 </div>
 
-<!-- Exa AI Content Extraction -->
+<!-- Parse/Content Fetching -->
 <div class="card">
-    <h2>Exa AI Content Extraction</h2>
-    <form id="exa-form" onsubmit="saveSettings(event, 'exa')">
+    <h2>Parse/Content Fetching</h2>
+    <p class="hint" style="margin-bottom: 15px;">Configure how content is extracted from web pages. Multiple providers can be used with automatic fallback.</p>
+    <form id="parse-form" onsubmit="saveSettings(event, 'parse')">
         <div class="form-group">
-            <label for="exa_api_key">API Key</label>
+            <label for="exa_api_key">Exa API Key</label>
             <input type="text" id="exa_api_key" name="exa_api_key"
                    placeholder="{% if exa_configured %}(configured - enter new value to change){% else %}Enter your Exa API key{% endif %}">
-            <span class="hint">Get your API key from <a href="https://exa.ai/" target="_blank">exa.ai</a>. Leave empty to keep current value.</span>
+            <span class="hint">Get your API key from <a href="https://exa.ai/" target="_blank">exa.ai</a>. Required for Exa provider. Leave empty to keep current value.</span>
         </div>
         <div class="form-group">
-            <label for="exa_text_max_chars">Max Text Characters</label>
-            <input type="number" id="exa_text_max_chars" name="exa_text_max_chars" value="{{ settings.exa_text_max_chars }}" min="1000" max="500000">
-            <span class="hint">Maximum characters to store for extracted text (default: 50000).</span>
+            <label for="parse_providers_order">Provider Order (fallback)</label>
+            <select id="parse_providers_order" name="parse_providers_order" class="form-select">
+                <option value="exa,direct" {% if settings.parse_providers_order == ['exa', 'direct'] %}selected{% endif %}>Exa → Direct (recommended)</option>
+                <option value="direct,exa" {% if settings.parse_providers_order == ['direct', 'exa'] %}selected{% endif %}>Direct → Exa</option>
+                <option value="exa" {% if settings.parse_providers_order == ['exa'] %}selected{% endif %}>Exa only</option>
+                <option value="direct" {% if settings.parse_providers_order == ['direct'] %}selected{% endif %}>Direct only</option>
+            </select>
+            <span class="hint">Order of providers to try. If one fails, the next is used automatically.</span>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="parse_min_text_chars">Min Text Threshold</label>
+                <input type="number" id="parse_min_text_chars" name="parse_min_text_chars" value="{{ settings.parse_min_text_chars }}" min="0" max="10000">
+                <span class="hint">Minimum characters for successful extraction (default: 200).</span>
+            </div>
+            <div class="form-group">
+                <label for="exa_text_max_chars">Max Text Characters</label>
+                <input type="number" id="exa_text_max_chars" name="exa_text_max_chars" value="{{ settings.exa_text_max_chars }}" min="1000" max="500000">
+                <span class="hint">Maximum characters to store (truncated if longer).</span>
+            </div>
         </div>
         <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Save Exa Settings</button>
-            {% if exa_configured %}
-            <button type="button" class="btn" onclick="testExa()">Test Exa API</button>
-            <span id="exa-result" class="hint" style="margin-left: 10px;"></span>
+            <button type="submit" class="btn btn-primary">Save Parse Settings</button>
+            <button type="button" class="btn" onclick="testParse()">Test Parse</button>
+            <span id="parse-result" class="hint" style="margin-left: 10px;"></span>
+        </div>
+    </form>
+</div>
+
+<!-- LLM Structured Extraction -->
+<div class="card">
+    <h2>LLM Structured Extraction</h2>
+    <form id="llm-form" onsubmit="saveSettings(event, 'llm')">
+        <div class="form-group">
+            <label for="llm_api_key">API Key</label>
+            <input type="text" id="llm_api_key" name="llm_api_key"
+                   placeholder="{% if llm_configured %}(configured - enter new value to change){% else %}Enter your OpenAI-compatible API key{% endif %}">
+            <span class="hint">API key for OpenAI-compatible service. Leave empty to keep current value.</span>
+        </div>
+        <div class="form-group">
+            <label for="llm_base_url">Base URL</label>
+            <input type="url" id="llm_base_url" name="llm_base_url" value="{{ settings.llm_base_url }}">
+            <span class="hint">Base URL for OpenAI-compatible API (default: https://api.openai.com). Do not include /v1/chat/completions.</span>
+        </div>
+        <div class="form-group">
+            <label for="llm_model">Model</label>
+            <input type="text" id="llm_model" name="llm_model" value="{{ settings.llm_model }}">
+            <span class="hint">Model name (e.g., gpt-4o-mini, gpt-4o, claude-3-haiku-20240307).</span>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="llm_timeout">Timeout (seconds)</label>
+                <input type="number" id="llm_timeout" name="llm_timeout" value="{{ settings.llm_timeout }}" min="10" max="300">
+            </div>
+            <div class="form-group">
+                <label for="llm_max_input_chars">Max Input Characters</label>
+                <input type="number" id="llm_max_input_chars" name="llm_max_input_chars" value="{{ settings.llm_max_input_chars }}" min="1000" max="100000">
+            </div>
+        </div>
+        <span class="hint">Timeout for LLM API calls and maximum characters to send to LLM (content will be truncated if longer).</span>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save LLM Settings</button>
+            {% if llm_configured %}
+            <button type="button" class="btn" onclick="testLlm()">Test LLM API</button>
+            <span id="llm-result" class="hint" style="margin-left: 10px;"></span>
             {% endif %}
         </div>
     </form>
@@ -140,13 +197,15 @@
     
     <h3>Change Password</h3>
     <form id="password-form" onsubmit="setPassword(event)">
-        <div class="form-group">
-            <label for="new_password">New Password</label>
-            <input type="password" id="new_password" name="new_password" minlength="8" placeholder="Minimum 8 characters">
-        </div>
-        <div class="form-group">
-            <label for="confirm_password">Confirm Password</label>
-            <input type="password" id="confirm_password" name="confirm_password" placeholder="Re-enter password">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="new_password">New Password</label>
+                <input type="password" id="new_password" name="new_password" minlength="8" placeholder="Minimum 8 characters">
+            </div>
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+                <input type="password" id="confirm_password" name="confirm_password" placeholder="Re-enter password">
+            </div>
         </div>
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">Set New Password</button>
@@ -224,10 +283,20 @@ async function saveSettings(event, section) {
         const deviceKey = form.bark_device_key.value.trim();
         if (deviceKey) data.bark_device_key = deviceKey;
         data.bark_server_url = form.bark_server_url.value.trim();
-    } else if (section === 'exa') {
+    } else if (section === 'parse') {
         const apiKey = form.exa_api_key.value.trim();
         if (apiKey) data.exa_api_key = apiKey;
         data.exa_text_max_chars = parseInt(form.exa_text_max_chars.value);
+        data.parse_min_text_chars = parseInt(form.parse_min_text_chars.value);
+        const providerOrder = form.parse_providers_order.value;
+        data.parse_providers_order = providerOrder.split(',');
+    } else if (section === 'llm') {
+        const apiKey = form.llm_api_key.value.trim();
+        if (apiKey) data.llm_api_key = apiKey;
+        data.llm_base_url = form.llm_base_url.value.trim();
+        data.llm_model = form.llm_model.value.trim();
+        data.llm_timeout = parseInt(form.llm_timeout.value);
+        data.llm_max_input_chars = parseInt(form.llm_max_input_chars.value);
     } else if (section === 'schedule') {
         data.check_hour = parseInt(form.check_hour.value);
         data.check_minute = parseInt(form.check_minute.value);
@@ -251,7 +320,8 @@ async function saveSettings(event, section) {
         
         // Clear sensitive input fields after save
         if (section === 'bark') form.bark_device_key.value = '';
-        if (section === 'exa') form.exa_api_key.value = '';
+        if (section === 'parse') form.exa_api_key.value = '';
+        if (section === 'llm') form.llm_api_key.value = '';
         
     } catch (error) {
         showMessage('Failed to save: ' + error.message, 'error');
@@ -326,16 +396,38 @@ async function testPush() {
     }
 }
 
-async function testExa() {
-    const resultSpan = document.getElementById('exa-result');
+async function testParse() {
+    const resultSpan = document.getElementById('parse-result');
     resultSpan.textContent = 'Testing...';
     try {
-        const data = await apiCall('/api/exa/test', { method: 'POST' });
+        const data = await apiCall('/api/parse/test', { method: 'POST' });
         resultSpan.textContent = '';
-        showMessage(`Exa API OK! Cost: $${data.cost_total.toFixed(4)}, Time: ${data.search_time_ms.toFixed(0)}ms`, 'success');
+        if (data.status === 'success') {
+            showMessage(`Parse OK via ${data.provider}! Text: ${data.text_length} chars`, 'success');
+        } else {
+            showMessage(`Parse failed via ${data.provider}: ${data.error}`, 'error');
+        }
     } catch (error) {
         resultSpan.textContent = '';
-        showMessage('Exa test failed: ' + error.message, 'error');
+        showMessage('Parse test failed: ' + error.message, 'error');
+    }
+}
+
+// Legacy alias
+async function testExa() {
+    return testParse();
+}
+
+async function testLlm() {
+    const resultSpan = document.getElementById('llm-result');
+    resultSpan.textContent = 'Testing...';
+    try {
+        const data = await apiCall('/api/llm/test', { method: 'POST' });
+        resultSpan.textContent = '';
+        showMessage(`LLM API OK! Model: ${data.model}, Response time: ${data.response_time_ms}ms`, 'success');
+    } catch (error) {
+        resultSpan.textContent = '';
+        showMessage('LLM test failed: ' + error.message, 'error');
     }
 }
 
