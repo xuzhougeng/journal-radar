@@ -16,6 +16,28 @@ from app.parse.base import ParseProvider, ParseResult
 
 logger = logging.getLogger(__name__)
 
+# Default UA prefix used in config - if this is detected, we use browser-like UA instead
+DEFAULT_UA_PREFIX = "JournalMonitor/"
+
+# Browser-like User-Agent for direct fetching (Chrome on Windows)
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Browser-like headers to reduce bot detection / 403 blocks
+BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
+
 
 def extract_readable_content(html: str, url: str) -> tuple[Optional[str], Optional[str]]:
     """
@@ -114,10 +136,20 @@ class DirectProvider(ParseProvider):
         data_dir = StaticConfig.get_parse_data_dir("direct")
         data_dir.mkdir(parents=True, exist_ok=True)
 
+        # Use browser-like UA if the configured UA is the default JournalMonitor placeholder
+        # This helps avoid 403 blocks from sites with bot detection
+        user_agent = config.user_agent
+        if user_agent.startswith(DEFAULT_UA_PREFIX):
+            user_agent = BROWSER_USER_AGENT
+            logger.debug("Using browser-like User-Agent for direct fetch")
+
+        # Build browser-like headers
+        headers = {**BROWSER_HEADERS, "User-Agent": user_agent}
+
         async with httpx.AsyncClient(
             timeout=config.request_timeout,
             follow_redirects=True,
-            headers={"User-Agent": config.user_agent},
+            headers=headers,
         ) as client:
             for url in urls:
                 result = await self._fetch_single(client, url, data_dir)
@@ -200,12 +232,19 @@ class DirectProvider(ParseProvider):
             )
 
         except httpx.HTTPStatusError as e:
+            # Log more details for debugging blocked requests (403, etc.)
+            final_url = str(e.response.url) if e.response.url else url
+            logger.debug(
+                f"Direct fetch HTTP error for {url}: {e.response.status_code} "
+                f"(final_url={final_url}, content-type={e.response.headers.get('content-type', 'n/a')})"
+            )
             return ParseResult(
                 url=url,
                 provider=self.name,
                 success=False,
                 error=f"HTTP {e.response.status_code}: {e.response.reason_phrase}",
                 status="http_error",
+                final_url=final_url,
             )
         except httpx.RequestError as e:
             return ParseResult(

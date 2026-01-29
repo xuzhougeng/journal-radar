@@ -95,6 +95,10 @@ async def fetch_contents(urls: list[str]) -> Optional[ExaResponse]:
                 json={
                     "ids": urls,
                     "text": True,
+                    # Use livecrawl fallback: try live crawl first, fall back to cache if it fails/times out
+                    # This helps avoid CRAWL_LIVECRAWL_TIMEOUT errors while still getting fresh content
+                    "livecrawl": "fallback",
+                    "livecrawlTimeout": 15000,  # 15 seconds timeout for live crawl
                 },
             )
             response.raise_for_status()
