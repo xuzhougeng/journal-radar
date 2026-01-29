@@ -27,6 +27,15 @@ class SubscriptionCreate(BaseModel):
     config: dict  # Source-specific config
 
 
+class SubscriptionUpdate(BaseModel):
+    """Patch model for updating a subscription."""
+
+    name: Optional[str] = None
+    source_type: Optional[str] = None  # 'rss' or 'crossref'
+    config: Optional[dict] = None  # Source-specific config
+    enabled: Optional[bool] = None
+
+
 class SubscriptionResponse(BaseModel):
     id: int
     name: str
@@ -342,6 +351,29 @@ async def list_subscriptions(
     ]
 
 
+@router.get("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+async def get_subscription(
+    request: Request,
+    subscription_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Get a single subscription."""
+    result = await db.execute(select(Subscription).where(Subscription.id == subscription_id))
+    sub = result.scalar_one_or_none()
+
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    return SubscriptionResponse(
+        id=sub.id,
+        name=sub.name,
+        source_type=sub.source_type,
+        config=json.loads(sub.config),
+        enabled=sub.enabled,
+    )
+
+
 @router.post("/subscriptions", response_model=SubscriptionResponse)
 async def create_subscription(
     request: Request,
@@ -375,6 +407,69 @@ async def create_subscription(
         source_type=subscription.source_type,
         config=data.config,
         enabled=subscription.enabled,
+    )
+
+
+@router.patch("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+async def update_subscription(
+    request: Request,
+    subscription_id: int,
+    data: SubscriptionUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Update a subscription (name/type/config/enabled)."""
+    result = await db.execute(select(Subscription).where(Subscription.id == subscription_id))
+    sub = result.scalar_one_or_none()
+
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    updated = False
+
+    if data.name is not None:
+        name = data.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        sub.name = name
+        updated = True
+
+    if data.source_type is not None:
+        if data.source_type not in ["rss", "crossref"]:
+            raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'rss' or 'crossref'")
+        sub.source_type = data.source_type
+        updated = True
+
+    if data.config is not None:
+        if not isinstance(data.config, dict):
+            raise HTTPException(status_code=400, detail="Invalid config. Must be an object")
+
+        # Validate config based on (possibly updated) source type.
+        source_type = data.source_type or sub.source_type
+        if source_type == "rss" and "feed_url" not in data.config:
+            raise HTTPException(status_code=400, detail="RSS source requires 'feed_url' in config")
+        if source_type == "crossref" and "issn" not in data.config:
+            raise HTTPException(status_code=400, detail="Crossref source requires 'issn' in config")
+
+        sub.config = json.dumps(data.config, ensure_ascii=False)
+        updated = True
+
+    if data.enabled is not None:
+        sub.enabled = bool(data.enabled)
+        updated = True
+
+    if not updated:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    await db.commit()
+    await db.refresh(sub)
+
+    return SubscriptionResponse(
+        id=sub.id,
+        name=sub.name,
+        source_type=sub.source_type,
+        config=json.loads(sub.config),
+        enabled=sub.enabled,
     )
 
 
@@ -421,6 +516,40 @@ async def toggle_subscription(
 
     return {"status": "toggled", "id": subscription_id, "enabled": subscription.enabled}
 
+
+@router.post("/subscriptions/{subscription_id}/test")
+async def test_subscription(
+    request: Request,
+    subscription_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """Test whether a subscription source is reachable and parsable."""
+    from app.runner import get_source_for_subscription
+
+    result = await db.execute(select(Subscription).where(Subscription.id == subscription_id))
+    sub = result.scalar_one_or_none()
+
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    try:
+        source = await get_source_for_subscription(sub)
+        entries = await source.fetch_entries()
+        sample_title = entries[0].title if entries else None
+        sample_link = entries[0].link if entries else None
+        return {
+            "status": "ok",
+            "subscription_id": sub.id,
+            "name": sub.name,
+            "source_type": sub.source_type,
+            "enabled": bool(sub.enabled),
+            "entries_fetched": len(entries),
+            "sample_title": sample_title,
+            "sample_link": sample_link,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Test failed: {str(e)}")
 
 @router.get("/subscriptions/export")
 async def export_subscriptions(
@@ -1258,6 +1387,308 @@ async def clear_user_type(
         "entry_id": entry_id,
         "user_type": None,
         "effective_type": type_info.effective_type,
+    }
+
+
+# =============================================================================
+# Tags API
+# =============================================================================
+
+def _normalize_tag_key(name: str) -> str:
+    """Normalize a tag name to a key for deduplication (lowercase, trimmed, collapsed whitespace)."""
+    import re
+    return re.sub(r'\s+', ' ', name.strip().lower())
+
+
+class UpdateTagsRequest(BaseModel):
+    """Request model for setting tags on an entry."""
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+@router.get("/tags")
+async def list_tags(
+    q: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List all tags with entry counts.
+    Optionally filter by query string (searches both name and key).
+    Public endpoint (no login required for browsing).
+    """
+    from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
+    from app.models import Tag, entry_tags
+
+    # Build query with entry count
+    query = (
+        select(Tag, func.count(entry_tags.c.entry_id).label("entry_count"))
+        .outerjoin(entry_tags, Tag.id == entry_tags.c.tag_id)
+        .group_by(Tag.id)
+        .order_by(desc(func.count(entry_tags.c.entry_id)), Tag.name)
+    )
+
+    if q:
+        search_term = f"%{q.lower()}%"
+        query = query.where(Tag.key.like(search_term))
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "id": tag.id,
+            "name": tag.name,
+            "key": tag.key,
+            "entry_count": entry_count,
+        }
+        for tag, entry_count in rows
+    ]
+
+
+@router.get("/entries/{entry_id}/tags")
+async def get_entry_tags(
+    request: Request,
+    entry_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get tags for a specific entry.
+    Public endpoint (no login required for viewing).
+    """
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.tags))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    return {
+        "entry_id": entry_id,
+        "tags": [
+            {"id": tag.id, "name": tag.name, "key": tag.key}
+            for tag in entry.tags
+        ],
+    }
+
+
+@router.put("/entries/{entry_id}/tags")
+async def set_entry_tags(
+    request: Request,
+    entry_id: int,
+    data: UpdateTagsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """
+    Set tags for an entry (replaces all existing tags).
+    New tags are created automatically if they don't exist.
+    Requires login.
+    """
+    from sqlalchemy.orm import selectinload
+    from app.models import Tag, entry_tags
+
+    # Get the entry
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.tags))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    # Normalize and dedupe input tags
+    tag_inputs: list[tuple[str, str]] = []  # (name, key) pairs
+    seen_keys: set[str] = set()
+    for name in data.tags:
+        name = name.strip()
+        if not name:
+            continue
+        key = _normalize_tag_key(name)
+        if key and key not in seen_keys:
+            tag_inputs.append((name, key))
+            seen_keys.add(key)
+
+    if not tag_inputs:
+        # Clear all tags
+        entry.tags = []
+        await db.commit()
+        return {
+            "status": "success",
+            "entry_id": entry_id,
+            "tags": [],
+        }
+
+    # Find existing tags by key
+    keys = [key for _, key in tag_inputs]
+    existing_result = await db.execute(select(Tag).where(Tag.key.in_(keys)))
+    existing_tags = {tag.key: tag for tag in existing_result.scalars().all()}
+
+    # Create missing tags
+    final_tags: list[Tag] = []
+    for name, key in tag_inputs:
+        if key in existing_tags:
+            final_tags.append(existing_tags[key])
+        else:
+            new_tag = Tag(name=name, key=key)
+            db.add(new_tag)
+            final_tags.append(new_tag)
+            existing_tags[key] = new_tag
+
+    # Update entry's tags
+    entry.tags = final_tags
+    await db.commit()
+
+    return {
+        "status": "success",
+        "entry_id": entry_id,
+        "tags": [
+            {"id": tag.id, "name": tag.name, "key": tag.key}
+            for tag in final_tags
+        ],
+    }
+
+
+@router.post("/entries/{entry_id}/tags")
+async def add_entry_tags(
+    request: Request,
+    entry_id: int,
+    data: UpdateTagsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """
+    Add tags to an entry (keeps existing tags).
+    New tags are created automatically if they don't exist.
+    Requires login.
+    """
+    from sqlalchemy.orm import selectinload
+    from app.models import Tag
+
+    # Get the entry
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.tags))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    # Normalize and dedupe input tags
+    tag_inputs: list[tuple[str, str]] = []  # (name, key) pairs
+    seen_keys: set[str] = set()
+    for name in data.tags:
+        name = name.strip()
+        if not name:
+            continue
+        key = _normalize_tag_key(name)
+        if key and key not in seen_keys:
+            tag_inputs.append((name, key))
+            seen_keys.add(key)
+
+    if not tag_inputs:
+        return {
+            "status": "success",
+            "entry_id": entry_id,
+            "tags": [
+                {"id": tag.id, "name": tag.name, "key": tag.key}
+                for tag in entry.tags
+            ],
+        }
+
+    # Find existing tags by key
+    keys = [key for _, key in tag_inputs]
+    existing_result = await db.execute(select(Tag).where(Tag.key.in_(keys)))
+    existing_tags = {tag.key: tag for tag in existing_result.scalars().all()}
+
+    # Create missing tags
+    tags_to_add: list[Tag] = []
+    for name, key in tag_inputs:
+        if key in existing_tags:
+            tags_to_add.append(existing_tags[key])
+        else:
+            new_tag = Tag(name=name, key=key)
+            db.add(new_tag)
+            tags_to_add.append(new_tag)
+            existing_tags[key] = new_tag
+
+    # Merge into entry.tags by key
+    current_by_key = {t.key: t for t in entry.tags}
+    for tag in tags_to_add:
+        current_by_key[tag.key] = tag
+
+    entry.tags = list(current_by_key.values())
+    await db.commit()
+
+    # Return updated tags (sorted by name for stable UI)
+    updated_tags = sorted(entry.tags, key=lambda t: (t.name or "").lower())
+    return {
+        "status": "success",
+        "entry_id": entry_id,
+        "tags": [
+            {"id": tag.id, "name": tag.name, "key": tag.key}
+            for tag in updated_tags
+        ],
+    }
+
+
+@router.delete("/entries/{entry_id}/tags/{tag_key}")
+async def remove_entry_tag(
+    request: Request,
+    entry_id: int,
+    tag_key: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_login_api),
+):
+    """
+    Remove a tag from an entry (by tag key).
+    If the tag becomes unused, it is deleted as well.
+    Requires login.
+    """
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import func
+    from app.models import Tag, entry_tags
+
+    norm_key = _normalize_tag_key(tag_key)
+
+    # Get the entry + tags
+    result = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.tags))
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    # Find the tag row
+    tag_result = await db.execute(select(Tag).where(Tag.key == norm_key))
+    tag = tag_result.scalar_one_or_none()
+    if not tag:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    # Remove association if present
+    entry.tags = [t for t in entry.tags if t.key != norm_key]
+    await db.commit()
+
+    # Cleanup: delete unused tag rows
+    remaining = await db.scalar(
+        select(func.count(entry_tags.c.entry_id)).where(entry_tags.c.tag_id == tag.id)
+    )
+    if (remaining or 0) == 0:
+        await db.delete(tag)
+        await db.commit()
+
+    # Return updated tags
+    refreshed = await db.execute(
+        select(Entry).where(Entry.id == entry_id).options(selectinload(Entry.tags))
+    )
+    entry2 = refreshed.scalar_one()
+    updated_tags = sorted(entry2.tags, key=lambda t: (t.name or "").lower())
+    return {
+        "status": "success",
+        "entry_id": entry_id,
+        "tags": [
+            {"id": t.id, "name": t.name, "key": t.key}
+            for t in updated_tags
+        ],
     }
 
 

@@ -48,10 +48,23 @@
             </select>
             <input type="hidden" name="page" value="{{ page }}" />
             <input type="hidden" name="page_size" value="{{ page_size or 10 }}" />
+            {% for tag in tag_filter %}
+            <input type="hidden" name="tag_filter" value="{{ tag }}" />
+            {% endfor %}
             <noscript><button type="submit">Apply</button></noscript>
         </form>
     </div>
 </div>
+
+{% if tag_filter %}
+<div class="active-filters">
+    <span class="filter-label">Filtering by tags:</span>
+    {% for tag in tag_filter %}
+    <span class="badge badge-tag badge-tag-active">{{ tag }}</span>
+    {% endfor %}
+    <a href="/entries?sort={{ sort }}&page_size={{ page_size }}{% if subscription_id %}&subscription_id={{ subscription_id }}{% endif %}{% for t in type_filter %}&type_filter={{ t }}{% endfor %}" class="btn btn-xs">Clear tag filter</a>
+</div>
+{% endif %}
 
 {% if entries %}
 <div class="entries-list">
@@ -326,15 +339,61 @@ async function openPreview(entryId, hasStructured = false) {
             // Type info not available; ignore.
         }
 
-        content.innerHTML = renderPreviewContent(parseData, llmData, typeData, entryId);
+        // Fetch tags (public endpoint, ignore errors)
+        let tagsData = null;
+        try {
+            tagsData = await apiCall(`/api/entries/${entryId}/tags`);
+        } catch (e) {
+            // Tags not available; ignore.
+        }
+
+        content.innerHTML = renderPreviewContent(parseData, llmData, typeData, tagsData, entryId);
     } catch (error) {
         title.textContent = 'Error';
         content.innerHTML = `<div class="preview-error">Failed to load preview: ${error.message}</div>`;
     }
 }
 
-function renderPreviewContent(parseData, llmData, typeData, entryId) {
+function renderPreviewContent(parseData, llmData, typeData, tagsData, entryId) {
     let html = '';
+    const isLoggedIn = {{ 'true' if logged_in else 'false' }};
+
+    // Tags section (always show)
+    html += '<div class="preview-section preview-tags-section">';
+    html += '<div class="preview-section-header">';
+    html += '<span class="preview-text-header">Tags</span>';
+    html += '</div>';
+    html += '<div class="preview-meta">';
+    
+    const tags = tagsData?.tags || [];
+    if (tags.length > 0) {
+        html += '<div class="preview-tags-list">';
+        for (const tag of tags) {
+            if (isLoggedIn) {
+                html += `<span class="tag-chip">`;
+                html += `<a href="/entries?tag_filter=${encodeURIComponent(tag.key)}" class="badge badge-tag">${escapeHtml(tag.name)}</a>`;
+                html += `<button type="button" class="tag-remove-btn" onclick="removeTag(${entryId}, '${escapeHtml(tag.key)}')" title="Remove tag" aria-label="Remove tag">×</button>`;
+                html += `</span>`;
+            } else {
+                html += `<a href="/entries?tag_filter=${encodeURIComponent(tag.key)}" class="badge badge-tag">${escapeHtml(tag.name)}</a>`;
+            }
+        }
+        html += '</div>';
+    } else {
+        html += '<div class="preview-meta-item hint">No tags assigned</div>';
+    }
+    
+    if (isLoggedIn) {
+        // Tag adder
+        html += '<div class="preview-meta-item preview-tags-editor">';
+        html += '<strong>Add Tag:</strong>';
+        html += `<input type="text" id="tags-input-${entryId}" class="tags-input" placeholder="e.g. ml, vision (comma separated)">`;
+        html += `<button class="btn btn-xs btn-primary" onclick="addTags(${entryId})">Add</button>`;
+        html += '</div>';
+    }
+    
+    html += '</div>';
+    html += '</div>';
 
     // Article Type Classification section (always show)
     html += '<div class="preview-section preview-type-section">';
@@ -555,6 +614,64 @@ async function clearUserType(entryId) {
         openPreview(entryId, true);
     } catch (error) {
         alert('Failed to clear type: ' + error.message);
+    }
+}
+
+async function saveTags(entryId) {
+    const tagsInput = document.getElementById(`tags-input-${entryId}`);
+    if (!tagsInput) return;
+    
+    // Parse comma-separated tags
+    const tagNames = tagsInput.value
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+    
+    try {
+        const data = await apiCall(`/api/entries/${entryId}/tags`, {
+            method: 'PUT',
+            body: JSON.stringify({ tags: tagNames }),
+        });
+        
+        // Refresh the preview to show updated tags
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to save tags: ' + error.message);
+    }
+}
+
+async function addTags(entryId) {
+    const tagsInput = document.getElementById(`tags-input-${entryId}`);
+    if (!tagsInput) return;
+
+    const tagNames = tagsInput.value
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
+    if (tagNames.length === 0) return;
+
+    try {
+        await apiCall(`/api/entries/${entryId}/tags`, {
+            method: 'POST',
+            body: JSON.stringify({ tags: tagNames }),
+        });
+        tagsInput.value = '';
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to add tags: ' + error.message);
+    }
+}
+
+async function removeTag(entryId, tagKey) {
+    if (!tagKey) return;
+    try {
+        await apiCall(`/api/entries/${entryId}/tags/${encodeURIComponent(tagKey)}`, {
+            method: 'DELETE',
+        });
+        openPreview(entryId, true);
+    } catch (error) {
+        alert('Failed to remove tag: ' + error.message);
     }
 }
 

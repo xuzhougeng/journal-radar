@@ -93,12 +93,13 @@ async def entries_page(
     page: int = 1,
     page_size: int = 10,
     type_filter: list[str] | None = Query(None),
+    tag_filter: list[str] | None = Query(None),
     subscription_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Recent entries page. Publicly accessible."""
     from app.entry_type import VALID_ARTICLE_TYPES
-    from app.models import EntryType, EntryStructure
+    from app.models import EntryType, EntryStructure, Tag
     
     config = get_runtime_config()
     today_date = datetime.now(ZoneInfo(config.timezone)).date()
@@ -125,6 +126,14 @@ async def entries_page(
             type_filter_values = [type_filter] if type_filter in VALID_ARTICLE_TYPES else []
         else:
             type_filter_values = [t for t in type_filter if t in VALID_ARTICLE_TYPES]
+
+    # Parse tag_filter from query params (can be multiple values)
+    tag_filter_values = []
+    if tag_filter:
+        if isinstance(tag_filter, str):
+            tag_filter_values = [tag_filter.strip().lower()] if tag_filter.strip() else []
+        else:
+            tag_filter_values = [t.strip().lower() for t in tag_filter if t.strip()]
 
     # Shared filters (apply to both count query and entries query)
     filters = []
@@ -155,6 +164,9 @@ async def entries_page(
                 )
             )
         filters.append(or_(*type_conditions))
+    if tag_filter_values:
+        # Filter by tag key (OR logic: entry has ANY of the specified tags)
+        filters.append(Entry.tags.any(Tag.key.in_(tag_filter_values)))
     if subscription_id_value:
         filters.append(Entry.subscription_id == subscription_id_value)
 
@@ -168,7 +180,7 @@ async def entries_page(
 
     offset = (page - 1) * page_size
 
-    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content), selectinload(Entry.structured), selectinload(Entry.type_info))
+    query = select(Entry).options(selectinload(Entry.subscription), selectinload(Entry.content), selectinload(Entry.structured), selectinload(Entry.type_info), selectinload(Entry.tags))
     if filters:
         query = query.where(*filters)
     if sort == "journal":
@@ -208,12 +220,41 @@ async def entries_page(
             "total_entries": total_entries,
             "total_pages": total_pages,
             "type_filter": type_filter_values,
+            "tag_filter": tag_filter_values,
             "valid_types": sorted(VALID_ARTICLE_TYPES),
             "subscription_id": subscription_id_value,
             "subscriptions": subscriptions,
             "today_date": today_date,
             "parse_enabled": is_parse_enabled(),
             "llm_configured": bool(config.llm_api_key),
+            "logged_in": is_logged_in(request),
+        },
+    )
+
+
+@router.get("/tags", response_class=HTMLResponse)
+async def tags_page(request: Request, db: AsyncSession = Depends(get_db)):
+    """Tags browsing page. Publicly accessible."""
+    from app.models import Tag, entry_tags
+
+    # Query all tags with entry counts
+    query = (
+        select(Tag, func.count(entry_tags.c.entry_id).label("entry_count"))
+        .outerjoin(entry_tags, Tag.id == entry_tags.c.tag_id)
+        .group_by(Tag.id)
+        .order_by(desc(func.count(entry_tags.c.entry_id)), Tag.name)
+    )
+    result = await db.execute(query)
+    tags_with_counts = [
+        {"tag": tag, "entry_count": entry_count}
+        for tag, entry_count in result.all()
+    ]
+
+    return templates.TemplateResponse(
+        "tags.html",
+        {
+            "request": request,
+            "tags": tags_with_counts,
             "logged_in": is_logged_in(request),
         },
     )

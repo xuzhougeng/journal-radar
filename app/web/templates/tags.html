@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Tags - Journal Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Tags</h1>
+    <div class="page-actions">
+        <span class="hint">Click a tag to view its entries</span>
+    </div>
+</div>
+
+{% if tags %}
+<div class="tags-grid">
+    {% for item in tags %}
+    <a href="/entries?tag_filter={{ item.tag.key | urlencode }}" class="tag-card">
+        <span class="tag-name">{{ item.tag.name }}</span>
+        <span class="tag-count">{{ item.entry_count }} {% if item.entry_count == 1 %}entry{% else %}entries{% endif %}</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No tags yet. Open an entry's preview and add some tags!</p>
+</div>
+{% endif %}
+
+{% endblock %}

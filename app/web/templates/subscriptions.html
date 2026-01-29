@@ -39,6 +39,8 @@
                     <button class="btn btn-sm" onclick="toggleSubscription({{ sub.id }})">
                         {{ 'Disable' if sub.enabled else 'Enable' }}
                     </button>
+                    <button class="btn btn-sm" onclick="showEditModal({{ sub.id }})">Edit</button>
+                    <button class="btn btn-sm" onclick="testSubscription({{ sub.id }}, this)">Test</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteSubscription({{ sub.id }}, '{{ sub.name }}')">
                         Delete
                     </button>
@@ -53,6 +55,54 @@
     <p>No subscriptions yet. Add your first journal to start monitoring!</p>
 </div>
 {% endif %}
+
+<!-- Edit Subscription Modal -->
+<div id="edit-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Edit Subscription</h2>
+            <button class="close-btn" onclick="hideEditModal()">&times;</button>
+        </div>
+        <form id="edit-form" onsubmit="saveEditSubscription(event)">
+            <input type="hidden" id="edit_id" name="id">
+            <div class="form-group">
+                <label for="edit_name">Name</label>
+                <input type="text" id="edit_name" name="name" required placeholder="e.g., Nature Medicine">
+            </div>
+            <div class="form-group">
+                <label for="edit_source_type">Source Type</label>
+                <select id="edit_source_type" name="source_type" onchange="updateEditConfigFields()">
+                    <option value="rss">RSS Feed</option>
+                    <option value="crossref">Crossref (ISSN)</option>
+                </select>
+            </div>
+            <div id="edit-config-fields">
+                <div class="form-group" id="edit-rss-config">
+                    <label for="edit_feed_url">Feed URL</label>
+                    <input type="url" id="edit_feed_url" name="feed_url" placeholder="https://example.com/feed.xml">
+                </div>
+                <div class="form-group hidden" id="edit-crossref-config">
+                    <label for="edit_issn">ISSN</label>
+                    <input type="text" id="edit_issn" name="issn" placeholder="1234-5678">
+                </div>
+                <div class="form-row hidden" id="edit-crossref-extra">
+                    <div class="form-group">
+                        <label for="edit_rows">Rows</label>
+                        <input type="number" id="edit_rows" name="rows" min="1" max="200" placeholder="20">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit_journal_name">Journal Name (optional)</label>
+                        <input type="text" id="edit_journal_name" name="journal_name" placeholder="Display name override">
+                    </div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideEditModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- Add Subscription Modal -->
 <div id="add-modal" class="modal hidden">
@@ -117,6 +167,8 @@
 
 {% block scripts %}
 <script>
+let _editOriginalConfig = {};
+
 function showAddModal() {
     document.getElementById('add-modal').classList.remove('hidden');
 }
@@ -140,6 +192,99 @@ function updateConfigFields() {
     const sourceType = document.getElementById('source_type').value;
     document.getElementById('rss-config').classList.toggle('hidden', sourceType !== 'rss');
     document.getElementById('crossref-config').classList.toggle('hidden', sourceType !== 'crossref');
+}
+
+function showEditModal(id) {
+    _editOriginalConfig = {};
+    document.getElementById('edit-form').reset();
+    document.getElementById('edit_id').value = id;
+    document.getElementById('edit-modal').classList.remove('hidden');
+
+    (async () => {
+        try {
+            const sub = await apiCall(`/api/subscriptions/${id}`);
+            _editOriginalConfig = sub.config || {};
+
+            document.getElementById('edit_name').value = sub.name || '';
+            document.getElementById('edit_source_type').value = sub.source_type || 'rss';
+            updateEditConfigFields();
+
+            if ((sub.source_type || '') === 'rss') {
+                document.getElementById('edit_feed_url').value = _editOriginalConfig.feed_url || '';
+            } else if ((sub.source_type || '') === 'crossref') {
+                document.getElementById('edit_issn').value = _editOriginalConfig.issn || '';
+                document.getElementById('edit_rows').value = _editOriginalConfig.rows || '';
+                document.getElementById('edit_journal_name').value = _editOriginalConfig.journal_name || '';
+            }
+        } catch (error) {
+            showMessage('Failed to load subscription: ' + error.message, 'error');
+        }
+    })();
+}
+
+function hideEditModal() {
+    document.getElementById('edit-modal').classList.add('hidden');
+    document.getElementById('edit-form').reset();
+    _editOriginalConfig = {};
+    updateEditConfigFields();
+}
+
+function updateEditConfigFields() {
+    const sourceType = document.getElementById('edit_source_type').value;
+    document.getElementById('edit-rss-config').classList.toggle('hidden', sourceType !== 'rss');
+    document.getElementById('edit-crossref-config').classList.toggle('hidden', sourceType !== 'crossref');
+    document.getElementById('edit-crossref-extra').classList.toggle('hidden', sourceType !== 'crossref');
+}
+
+async function saveEditSubscription(event) {
+    event.preventDefault();
+    const id = document.getElementById('edit_id').value;
+    const name = document.getElementById('edit_name').value;
+    const sourceType = document.getElementById('edit_source_type').value;
+
+    // Preserve unknown config keys when possible.
+    const config = { ...(_editOriginalConfig || {}) };
+
+    if (sourceType === 'rss') {
+        config.feed_url = document.getElementById('edit_feed_url').value;
+        delete config.issn;
+        delete config.rows;
+        delete config.journal_name;
+    } else if (sourceType === 'crossref') {
+        config.issn = document.getElementById('edit_issn').value;
+        const rowsRaw = document.getElementById('edit_rows').value;
+        const journalName = document.getElementById('edit_journal_name').value;
+
+        if (rowsRaw !== '') {
+            const rows = parseInt(rowsRaw, 10);
+            if (!Number.isNaN(rows)) config.rows = rows;
+        } else {
+            delete config.rows;
+        }
+
+        if (journalName && journalName.trim()) {
+            config.journal_name = journalName.trim();
+        } else {
+            delete config.journal_name;
+        }
+
+        delete config.feed_url;
+    }
+
+    try {
+        await apiCall(`/api/subscriptions/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                name: name,
+                source_type: sourceType,
+                config: config
+            })
+        });
+        showMessage('Subscription updated!', 'success');
+        setTimeout(() => location.reload(), 900);
+    } catch (error) {
+        showMessage('Failed to update: ' + error.message, 'error');
+    }
 }
 
 async function addSubscription(event) {
@@ -191,6 +336,30 @@ async function deleteSubscription(id, name) {
         showMessage('Subscription deleted', 'success');
     } catch (error) {
         showMessage('Failed to delete: ' + error.message, 'error');
+    }
+}
+
+async function testSubscription(id, btn) {
+    const originalText = btn ? btn.textContent : 'Test';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '...';
+    }
+
+    try {
+        const result = await apiCall(`/api/subscriptions/${id}/test`, { method: 'POST' });
+        let msg = `OK: ${result.name} (${result.source_type})`;
+        msg += `\nFetched: ${result.entries_fetched} entries`;
+        if (result.sample_title) msg += `\nSample: ${result.sample_title}`;
+        if (result.sample_link) msg += `\nLink: ${result.sample_link}`;
+        showMessage(msg, 'success');
+    } catch (error) {
+        showMessage('Test failed: ' + error.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
     }
 }
 

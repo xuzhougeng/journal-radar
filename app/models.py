@@ -5,10 +5,19 @@ SQLAlchemy models for Journal Monitor.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, Boolean, func
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, Boolean, Table, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+
+# Association table for Entry <-> Tag many-to-many relationship
+entry_tags = Table(
+    "entry_tags",
+    Base.metadata,
+    Column("entry_id", Integer, ForeignKey("entries.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Subscription(Base):
@@ -74,6 +83,9 @@ class Entry(Base):
     )
     type_info: Mapped[Optional["EntryType"]] = relationship(
         "EntryType", back_populates="entry", uselist=False, cascade="all, delete-orphan"
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        "Tag", secondary=entry_tags, back_populates="entries"
     )
 
     __table_args__ = (
@@ -293,4 +305,37 @@ class AppConfig(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Tag(Base):
+    """
+    User-defined tag for categorizing entries.
+    Tags are normalized: 'key' is lowercase/trimmed for uniqueness, 'name' stores display text.
+    """
+
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )  # Display name (original casing)
+    key: Mapped[str] = mapped_column(
+        String(100), nullable=False, unique=True
+    )  # Normalized key (lowercase, trimmed)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    entries: Mapped[list["Entry"]] = relationship(
+        "Entry", secondary=entry_tags, back_populates="tags"
+    )
+
+    __table_args__ = (
+        # Index for searching tags by key
+        Index("ix_tags_key", "key"),
     )
