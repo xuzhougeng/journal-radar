@@ -69,6 +69,9 @@ class Entry(Base):
     content: Mapped[Optional["EntryContent"]] = relationship(
         "EntryContent", back_populates="entry", uselist=False, cascade="all, delete-orphan"
     )
+    structured: Mapped[Optional["EntryStructure"]] = relationship(
+        "EntryStructure", back_populates="entry", uselist=False, cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         # Unique constraint on fingerprint per subscription for deduplication
@@ -138,6 +141,58 @@ class EntryContent(Base):
     __table_args__ = (
         # Index for querying by provider
         Index("ix_entry_contents_provider", "provider"),
+    )
+
+
+class EntryStructure(Base):
+    """LLM-extracted structured information for an entry (site type and summary)."""
+
+    __tablename__ = "entry_structures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("entries.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="openai_compatible"
+    )  # 'openai_compatible' or future providers
+    model: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )  # Model name used (e.g., 'gpt-4o-mini')
+    base_url: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )  # API base URL for debugging
+    site_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="other"
+    )  # Enum: paper, journal, news, blog, docs, repository, forum, product, dataset, other
+    site_type_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # Reason when site_type is 'other'
+    summary: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # LLM-generated summary
+    raw_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # Raw LLM response JSON for debugging
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending"
+    )  # 'success', 'failed', 'pending'
+    error_message: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )  # Error message if failed
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    entry: Mapped["Entry"] = relationship("Entry", back_populates="structured")
+
+    __table_args__ = (
+        # Index for querying by status
+        Index("ix_entry_structures_status", "status"),
     )
 
 

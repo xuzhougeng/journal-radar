@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.config import get_runtime_config
 from app.db import async_session
-from app.models import Subscription, Entry, CheckRun, EntryContent
+from app.models import Subscription, Entry, CheckRun, EntryContent, EntryStructure
 from app.sources.base import Entry as SourceEntry
 
 logger = logging.getLogger(__name__)
@@ -70,11 +70,11 @@ async def save_new_entries(
     return new_entries
 
 
-async def fetch_exa_content_for_entries(
+async def fetch_parse_content_for_entries(
     session, subscription_id: int, new_entries: list[SourceEntry]
-) -> int:
+) -> list[int]:
     """
-    Fetch web page content via Exa AI for new RSS entries and save to DB.
+    Fetch web page content for new RSS entries using parse providers with fallback.
 
     Args:
         session: Database session.
@@ -82,41 +82,30 @@ async def fetch_exa_content_for_entries(
         new_entries: List of newly inserted entries (SourceEntry objects).
 
     Returns:
-        Number of entries with successfully fetched content.
+        List of entry IDs with successfully fetched content.
     """
-    from app.exa_ai import fetch_contents, truncate_text, is_exa_enabled
+    from app.parse import fetch_content_with_fallback, is_parse_enabled
+    from app.parse.runner import truncate_text
 
-    if not is_exa_enabled():
-        return 0
+    if not is_parse_enabled():
+        return []
 
     if not new_entries:
-        return 0
+        return []
 
     # Collect URLs and build fingerprint -> link mapping
     urls = [entry.link for entry in new_entries if entry.link]
     if not urls:
-        return 0
+        return []
 
-    # Fetch content from Exa
-    exa_response = await fetch_contents(urls)
-    if not exa_response:
-        logger.warning(f"Exa content fetch returned no results for subscription {subscription_id}")
-        return 0
+    config = get_runtime_config()
 
-    # Log any errors
-    if exa_response.errors:
-        for error in exa_response.errors:
-            logger.warning(f"Exa failed for {error.id}: {error.error_tag or 'unknown'}")
+    # Fetch content with fallback
+    parse_results = await fetch_content_with_fallback(urls)
 
-    # Build URL -> Exa result mapping (use both original id and returned url)
-    url_to_result = {}
-    for result in exa_response.results:
-        # Map by original requested URL (id)
-        if result.id:
-            url_to_result[result.id] = result
-        # Also map by returned URL if different
-        if result.url and result.url != result.id:
-            url_to_result[result.url] = result
+    if not parse_results:
+        logger.warning(f"Parse content fetch returned no results for subscription {subscription_id}")
+        return []
 
     # Get entry IDs from database by fingerprint
     fingerprint_to_entry = {entry.fingerprint: entry for entry in new_entries}
@@ -129,42 +118,167 @@ async def fetch_exa_content_for_entries(
     )
     db_entries = db_result.all()
 
-    saved_count = 0
+    saved_entry_ids = []
     for entry_id, fingerprint, link in db_entries:
-        # Find matching Exa result
-        exa_result = url_to_result.get(link)
-        if not exa_result:
-            logger.debug(f"No Exa result found for entry {entry_id} with link {link}")
+        # Find matching parse result
+        parse_result = parse_results.get(link)
+        if not parse_result:
+            logger.debug(f"No parse result found for entry {entry_id} with link {link}")
+            continue
+
+        # Check if successful and meets threshold
+        if not parse_result.success or not parse_result.meets_threshold(config.parse_min_text_chars):
+            logger.debug(
+                f"Parse result for entry {entry_id} failed or below threshold: "
+                f"success={parse_result.success}, text_len={len(parse_result.text or '')}"
+            )
             continue
 
         # Truncate text
-        truncated_text = truncate_text(exa_result.text)
+        truncated_text = truncate_text(parse_result.text)
+
+        # Extract metadata for Exa-compatible fields
+        metadata = parse_result.metadata or {}
 
         # Insert EntryContent (ignore if already exists due to unique constraint)
         stmt = (
             sqlite_insert(EntryContent)
             .values(
                 entry_id=entry_id,
-                provider="exa",
-                request_id=exa_response.request_id,
-                status=exa_result.status,
-                url=exa_result.url,
-                title=exa_result.title,
-                author=exa_result.author,
+                provider=parse_result.provider,
+                request_id=metadata.get("request_id"),
+                status=parse_result.status,
+                url=parse_result.final_url,
+                title=parse_result.title,
+                author=parse_result.author,
                 text=truncated_text,
-                raw_path=exa_response.raw_path,
-                cost_total=exa_response.cost_total,
-                cost_text=exa_response.cost_text,
-                search_time_ms=exa_response.search_time_ms,
+                raw_path=parse_result.raw_path,
+                cost_total=metadata.get("cost_total"),
+                cost_text=metadata.get("cost_text"),
+                search_time_ms=metadata.get("search_time_ms"),
             )
             .on_conflict_do_nothing(index_elements=["entry_id"])
         )
         result = await session.execute(stmt)
         if result.rowcount > 0:
-            saved_count += 1
+            saved_entry_ids.append(entry_id)
+            logger.debug(
+                f"Saved content for entry {entry_id} via {parse_result.provider} "
+                f"(text: {len(truncated_text or '')} chars)"
+            )
 
     await session.commit()
-    logger.info(f"Saved Exa content for {saved_count}/{len(new_entries)} entries")
+    logger.info(f"Saved parse content for {len(saved_entry_ids)}/{len(new_entries)} entries")
+    return saved_entry_ids
+
+
+# Keep old function name as alias for backward compatibility
+async def fetch_exa_content_for_entries(
+    session, subscription_id: int, new_entries: list[SourceEntry]
+) -> list[int]:
+    """
+    Legacy alias for fetch_parse_content_for_entries.
+    Deprecated: Use fetch_parse_content_for_entries instead.
+    """
+    return await fetch_parse_content_for_entries(session, subscription_id, new_entries)
+
+
+async def fetch_llm_structure_for_entries(
+    session, entry_ids: list[int]
+) -> int:
+    """
+    Extract structured information via LLM for entries with content.
+
+    Args:
+        session: Database session.
+        entry_ids: List of entry IDs to process.
+
+    Returns:
+        Number of entries with successfully extracted structure.
+    """
+    from app.llm_struct import is_llm_enabled, extract_structured_info
+
+    if not is_llm_enabled():
+        return 0
+
+    if not entry_ids:
+        return 0
+
+    config = get_runtime_config()
+    saved_count = 0
+
+    for entry_id in entry_ids:
+        try:
+            # Check if structure already exists (skip if so)
+            existing = await session.execute(
+                select(EntryStructure).where(EntryStructure.entry_id == entry_id)
+            )
+            if existing.scalar_one_or_none():
+                logger.debug(f"Structure already exists for entry {entry_id}, skipping")
+                continue
+
+            # Get the content for this entry
+            content_result = await session.execute(
+                select(EntryContent).where(EntryContent.entry_id == entry_id)
+            )
+            content = content_result.scalar_one_or_none()
+            if not content or not content.text:
+                logger.debug(f"No content for entry {entry_id}, skipping LLM")
+                continue
+
+            # Extract structured info
+            result = await extract_structured_info(
+                title=content.title,
+                url=content.url,
+                text=content.text,
+            )
+
+            # Save to database
+            stmt = (
+                sqlite_insert(EntryStructure)
+                .values(
+                    entry_id=entry_id,
+                    provider="openai_compatible",
+                    model=result.model,
+                    base_url=config.llm_base_url,
+                    site_type=result.site_type,
+                    site_type_reason=result.site_type_reason,
+                    summary=result.summary,
+                    raw_json=result.raw_json,
+                    status="success",
+                )
+                .on_conflict_do_nothing(index_elements=["entry_id"])
+            )
+            insert_result = await session.execute(stmt)
+            if insert_result.rowcount > 0:
+                saved_count += 1
+                logger.debug(f"Saved LLM structure for entry {entry_id}: {result.site_type}")
+
+        except Exception as e:
+            logger.warning(f"LLM extraction failed for entry {entry_id}: {e}")
+            # Save failed status
+            try:
+                stmt = (
+                    sqlite_insert(EntryStructure)
+                    .values(
+                        entry_id=entry_id,
+                        provider="openai_compatible",
+                        model=config.llm_model,
+                        base_url=config.llm_base_url,
+                        site_type="other",
+                        site_type_reason="LLM extraction failed",
+                        status="failed",
+                        error_message=str(e)[:1000],
+                    )
+                    .on_conflict_do_nothing(index_elements=["entry_id"])
+                )
+                await session.execute(stmt)
+            except Exception:
+                pass
+
+    await session.commit()
+    if saved_count > 0:
+        logger.info(f"Saved LLM structure for {saved_count}/{len(entry_ids)} entries")
     return saved_count
 
 
@@ -176,7 +290,7 @@ async def run_check() -> dict[str, Any]:
         Dictionary with check results including new_entries count and notifications count.
     """
     from app.notifier.bark import BarkNotifier
-    from app.exa_ai import is_exa_enabled
+    from app.parse import is_parse_enabled
 
     async with async_session() as session:
         # Create a check run record
@@ -218,20 +332,37 @@ async def run_check() -> dict[str, Any]:
                             f"Found {len(new_entries)} new entries for '{subscription.name}'"
                         )
 
-                        # Fetch Exa content for RSS subscriptions (if enabled)
-                        if subscription.source_type == "rss" and is_exa_enabled():
+                        # Fetch content for RSS subscriptions using parse providers (if enabled)
+                        if subscription.source_type == "rss" and is_parse_enabled():
                             try:
-                                exa_count = await fetch_exa_content_for_entries(
+                                content_entry_ids = await fetch_parse_content_for_entries(
                                     session, subscription.id, new_entries
                                 )
-                                if exa_count > 0:
+                                if content_entry_ids:
                                     logger.info(
-                                        f"Exa content fetched for {exa_count} entries from '{subscription.name}'"
+                                        f"Content fetched for {len(content_entry_ids)} entries from '{subscription.name}'"
                                     )
-                            except Exception as exa_err:
+                                    
+                                    # Auto-trigger LLM structured extraction (if enabled)
+                                    from app.llm_struct import is_llm_enabled
+                                    if is_llm_enabled():
+                                        try:
+                                            llm_count = await fetch_llm_structure_for_entries(
+                                                session, content_entry_ids
+                                            )
+                                            if llm_count > 0:
+                                                logger.info(
+                                                    f"LLM structure extracted for {llm_count} entries from '{subscription.name}'"
+                                                )
+                                        except Exception as llm_err:
+                                            # Log but don't fail the whole run
+                                            logger.error(
+                                                f"LLM extraction failed for '{subscription.name}': {llm_err}"
+                                            )
+                            except Exception as parse_err:
                                 # Log but don't fail the whole run
                                 logger.error(
-                                    f"Exa content fetch failed for '{subscription.name}': {exa_err}"
+                                    f"Content fetch failed for '{subscription.name}': {parse_err}"
                                 )
 
                 except Exception as e:

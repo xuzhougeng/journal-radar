@@ -73,6 +73,44 @@ class RuntimeConfig(BaseModel):
         description="Maximum characters to store for Exa extracted text (truncate if longer)",
     )
 
+    # Parse/Content fetching (multi-provider with fallback)
+    parse_providers_order: list[str] = Field(
+        default=["exa", "direct"],
+        description="Order of providers to try for content extraction (fallback order)",
+    )
+    parse_min_text_chars: int = Field(
+        default=200,
+        ge=0,
+        le=10000,
+        description="Minimum text length threshold for successful extraction",
+    )
+
+    # LLM structured extraction (OpenAI-compatible API)
+    llm_api_key: Optional[str] = Field(
+        default=None,
+        description="API key for OpenAI-compatible LLM service",
+    )
+    llm_base_url: str = Field(
+        default="https://api.openai.com",
+        description="Base URL for OpenAI-compatible API (without /v1/chat/completions)",
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        description="Model name for LLM structured extraction",
+    )
+    llm_timeout: int = Field(
+        default=60,
+        ge=10,
+        le=300,
+        description="Timeout in seconds for LLM API calls",
+    )
+    llm_max_input_chars: int = Field(
+        default=15000,
+        ge=1000,
+        le=100000,
+        description="Maximum characters to send to LLM (truncate if longer)",
+    )
+
     # Authentication (stored with password hash, not plaintext)
     auth_username: str = Field(
         default="admin",
@@ -125,6 +163,11 @@ class StaticConfig:
         return cls.DATA_DIR / "exa"
 
     @classmethod
+    def get_parse_data_dir(cls, provider: str) -> Path:
+        """Get the parse raw data directory for a specific provider."""
+        return cls.DATA_DIR / "parse" / provider
+
+    @classmethod
     def ensure_data_dir(cls) -> None:
         """Ensure the data directory exists."""
         cls.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,6 +176,11 @@ class StaticConfig:
     def ensure_exa_data_dir(cls) -> None:
         """Ensure the Exa data directory exists."""
         cls.get_exa_data_dir().mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def ensure_parse_data_dir(cls, provider: str) -> None:
+        """Ensure the parse data directory for a provider exists."""
+        cls.get_parse_data_dir(provider).mkdir(parents=True, exist_ok=True)
 
 
 # =============================================================================
@@ -243,6 +291,34 @@ class _LegacySettingsShim:
     @property
     def exa_text_max_chars(self) -> int:
         return get_runtime_config().exa_text_max_chars
+
+    @property
+    def parse_providers_order(self) -> list[str]:
+        return get_runtime_config().parse_providers_order
+
+    @property
+    def parse_min_text_chars(self) -> int:
+        return get_runtime_config().parse_min_text_chars
+
+    @property
+    def llm_api_key(self) -> Optional[str]:
+        return get_runtime_config().llm_api_key
+
+    @property
+    def llm_base_url(self) -> str:
+        return get_runtime_config().llm_base_url
+
+    @property
+    def llm_model(self) -> str:
+        return get_runtime_config().llm_model
+
+    @property
+    def llm_timeout(self) -> int:
+        return get_runtime_config().llm_timeout
+
+    @property
+    def llm_max_input_chars(self) -> int:
+        return get_runtime_config().llm_max_input_chars
 
     @property
     def auth_username(self) -> str:
