@@ -2,6 +2,8 @@
 
 A web application that monitors journal updates (via RSS and Crossref) and sends push notifications to your phone via [Bark](https://github.com/Finb/Bark).
 
+- 中文版说明见 `docs/README_zh.md`
+
 ## Features
 
 - **Multiple Sources**: Support for RSS/Atom feeds and Crossref API
@@ -12,6 +14,25 @@ A web application that monitors journal updates (via RSS and Crossref) and sends
 - **Web-based Configuration**: All settings can be modified through the web UI
 
 ## Quick Start
+
+## Deployment
+
+```bash
+# Clone your repo
+git clone https://github.com/xuzhougeng/journal-radar.git
+cd journal-radar
+
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run (production)
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
 ### 1. Install Dependencies
 
