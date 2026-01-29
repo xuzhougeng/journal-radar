@@ -163,10 +163,54 @@ async def call_chat_completions(
         "response_format": {"type": "json_object"},  # Request JSON output
     }
     
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    def _extract_error_detail(resp: httpx.Response) -> str:
+        """
+        Extract best-effort error message from OpenAI-compatible responses.
+        Avoid leaking headers; only return response body details.
+        """
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                err = data.get("error")
+                if isinstance(err, dict):
+                    msg = err.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        return msg.strip()
+                # Some proxies return { "message": "...", ... }
+                msg = data.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    return msg.strip()
+        except Exception:
+            pass
+        # Fall back to raw text (truncate to keep UI readable)
+        text = (resp.text or "").strip()
+        if len(text) > 2000:
+            return text[:2000] + "...(truncated)"
+        return text or "No response body"
+
+    async def _post(json_payload: dict) -> dict:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(endpoint, headers=headers, json=json_payload)
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                detail = _extract_error_detail(resp)
+                raise ValueError(
+                    f"Client error '{resp.status_code} {resp.reason_phrase}' for url '{str(resp.url)}': {detail}"
+                ) from e
+            return resp.json()
+
+    try:
+        return await _post(payload)
+    except ValueError as e:
+        # Many "OpenAI-compatible" proxies/models don't support response_format.
+        # If the error points to response_format, retry once without it.
+        msg = str(e).lower()
+        if "response_format" in msg:
+            fallback_payload = dict(payload)
+            fallback_payload.pop("response_format", None)
+            return await _post(fallback_payload)
+        raise
 
 
 def parse_llm_response(response: dict) -> dict:

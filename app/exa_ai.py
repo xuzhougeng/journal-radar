@@ -3,6 +3,7 @@ Exa AI content extraction client.
 https://docs.exa.ai/reference/contents
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -62,9 +63,27 @@ def is_exa_enabled() -> bool:
     return bool(config.exa_api_key)
 
 
+def _is_retryable_error(exc: Exception) -> bool:
+    """
+    Check if an exception is retryable.
+    
+    Retryable errors:
+    - httpx.RequestError (connection issues, timeouts, etc.)
+    - httpx.HTTPStatusError with 429 (rate limit) or 5xx (server error) status codes
+    """
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        return status_code == 429 or status_code >= 500
+    return False
+
+
 async def fetch_contents(urls: list[str]) -> Optional[ExaResponse]:
     """
     Fetch web page contents via Exa AI contents API.
+
+    Supports configurable retries with exponential backoff for transient errors.
 
     Args:
         urls: List of URLs to extract content from.
@@ -84,110 +103,140 @@ async def fetch_contents(urls: list[str]) -> Optional[ExaResponse]:
     # Ensure the exa data directory exists
     StaticConfig.ensure_exa_data_dir()
 
-    try:
-        async with httpx.AsyncClient(timeout=config.request_timeout * 2) as client:
-            response = await client.post(
-                EXA_CONTENTS_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": config.exa_api_key,
-                },
-                json={
-                    "ids": urls,
-                    "text": True,
-                    # Use livecrawl fallback: try live crawl first, fall back to cache if it fails/times out
-                    # This helps avoid CRAWL_LIVECRAWL_TIMEOUT errors while still getting fresh content
-                    "livecrawl": "fallback",
-                    "livecrawlTimeout": 15000,  # 15 seconds timeout for live crawl
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+    # Total attempts = 1 (initial) + retries
+    max_attempts = 1 + config.exa_contents_retries
+    last_exception: Optional[Exception] = None
 
-        # Save raw response to disk
-        request_id = data.get("requestId", "unknown")
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"{request_id}_{timestamp}.json"
-        raw_path = StaticConfig.get_exa_data_dir() / filename
-
-        with open(raw_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-        # Relative path for database storage
-        relative_raw_path = str(Path("data/exa") / filename)
-
-        logger.info(f"Exa response saved to {raw_path}")
-
-        # Parse results
-        results_raw = data.get("results", [])
-        statuses_raw = data.get("statuses", [])
-
-        # Build status lookup by id
-        status_map = {s.get("id"): s.get("status", "unknown") for s in statuses_raw}
-
-        results = []
-        for r in results_raw:
-            result_id = r.get("id", "")
-            results.append(
-                ExaResult(
-                    id=result_id,
-                    url=r.get("url", result_id),
-                    title=r.get("title"),
-                    author=r.get("author"),
-                    text=r.get("text"),
-                    status=status_map.get(result_id, "unknown"),
-                    image=r.get("image"),
-                    favicon=r.get("favicon"),
+    for attempt in range(max_attempts):
+        try:
+            async with httpx.AsyncClient(timeout=config.request_timeout * 2) as client:
+                response = await client.post(
+                    EXA_CONTENTS_URL,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": config.exa_api_key,
+                    },
+                    json={
+                        "ids": urls,
+                        "text": True,
+                        "livecrawl": config.exa_livecrawl,
+                        "livecrawlTimeout": config.exa_livecrawl_timeout_ms,
+                    },
                 )
-            )
+                response.raise_for_status()
+                data = response.json()
 
-        # Parse errors from statuses
-        errors = []
-        for s in statuses_raw:
-            if s.get("status") == "error":
-                error_info = s.get("error", {})
-                errors.append(
-                    ExaError(
-                        id=s.get("id", ""),
-                        status="error",
-                        error_tag=error_info.get("tag") if isinstance(error_info, dict) else None,
+            # Success - process the response
+            # Save raw response to disk
+            request_id = data.get("requestId", "unknown")
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            filename = f"{request_id}_{timestamp}.json"
+            raw_path = StaticConfig.get_exa_data_dir() / filename
+
+            with open(raw_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # Relative path for database storage
+            relative_raw_path = str(Path("data/exa") / filename)
+
+            logger.info(f"Exa response saved to {raw_path}")
+
+            # Parse results
+            results_raw = data.get("results", [])
+            statuses_raw = data.get("statuses", [])
+
+            # Build status lookup by id
+            status_map = {s.get("id"): s.get("status", "unknown") for s in statuses_raw}
+
+            results = []
+            for r in results_raw:
+                result_id = r.get("id", "")
+                results.append(
+                    ExaResult(
+                        id=result_id,
+                        url=r.get("url", result_id),
+                        title=r.get("title"),
+                        author=r.get("author"),
+                        text=r.get("text"),
+                        status=status_map.get(result_id, "unknown"),
+                        image=r.get("image"),
+                        favicon=r.get("favicon"),
                     )
                 )
 
-        # Parse costs
-        cost_dollars = data.get("costDollars", {})
-        cost_total = cost_dollars.get("total", 0.0)
-        cost_contents = cost_dollars.get("contents", {})
-        cost_text = cost_contents.get("text", 0.0) if isinstance(cost_contents, dict) else 0.0
-        search_time_ms = data.get("searchTime", 0.0)
+            # Parse errors from statuses
+            errors = []
+            for s in statuses_raw:
+                if s.get("status") == "error":
+                    error_info = s.get("error", {})
+                    errors.append(
+                        ExaError(
+                            id=s.get("id", ""),
+                            status="error",
+                            error_tag=error_info.get("tag") if isinstance(error_info, dict) else None,
+                        )
+                    )
 
-        if errors:
-            error_tags = [e.error_tag or "unknown" for e in errors]
-            logger.warning(f"Exa errors for {len(errors)} URLs: {error_tags}")
+            # Parse costs
+            cost_dollars = data.get("costDollars", {})
+            cost_total = cost_dollars.get("total", 0.0)
+            cost_contents = cost_dollars.get("contents", {})
+            cost_text = cost_contents.get("text", 0.0) if isinstance(cost_contents, dict) else 0.0
+            search_time_ms = data.get("searchTime", 0.0)
 
-        logger.info(
-            f"Exa fetched {len(results)} results, {len(errors)} errors, cost: ${cost_total:.4f}, time: {search_time_ms:.0f}ms"
-        )
+            if errors:
+                error_tags = [e.error_tag or "unknown" for e in errors]
+                logger.warning(f"Exa errors for {len(errors)} URLs: {error_tags}")
 
-        return ExaResponse(
-            request_id=request_id,
-            results=results,
-            errors=errors,
-            cost_total=cost_total,
-            cost_text=cost_text,
-            search_time_ms=search_time_ms,
-            raw_path=relative_raw_path,
-        )
+            logger.info(
+                f"Exa fetched {len(results)} results, {len(errors)} errors, cost: ${cost_total:.4f}, time: {search_time_ms:.0f}ms"
+            )
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Exa API HTTP error: {e.response.status_code} - {e.response.text}")
-        return None
-    except httpx.RequestError as e:
-        logger.error(f"Exa API request error: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Exa API unexpected error: {e}")
-        return None
+            return ExaResponse(
+                request_id=request_id,
+                results=results,
+                errors=errors,
+                cost_total=cost_total,
+                cost_text=cost_text,
+                search_time_ms=search_time_ms,
+                raw_path=relative_raw_path,
+            )
+
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            last_exception = e
+            
+            # Check if we should retry
+            if _is_retryable_error(e) and attempt < max_attempts - 1:
+                # Exponential backoff: 0.5s, 1.0s, 1.5s, 2.0s, ...
+                backoff = 0.5 * (attempt + 1)
+                if isinstance(e, httpx.HTTPStatusError):
+                    logger.warning(
+                        f"Exa API HTTP error (attempt {attempt + 1}/{max_attempts}): "
+                        f"{e.response.status_code}, retrying in {backoff:.1f}s..."
+                    )
+                else:
+                    logger.warning(
+                        f"Exa API request error (attempt {attempt + 1}/{max_attempts}): "
+                        f"{type(e).__name__}, retrying in {backoff:.1f}s..."
+                    )
+                await asyncio.sleep(backoff)
+                continue
+            
+            # Non-retryable or out of retries
+            if isinstance(e, httpx.HTTPStatusError):
+                logger.error(f"Exa API HTTP error: {e.response.status_code} - {e.response.text}")
+            else:
+                logger.error(f"Exa API request error: {e}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Exa API unexpected error: {e}")
+            return None
+
+    # Should not reach here, but just in case
+    if last_exception:
+        logger.error(f"Exa API failed after {max_attempts} attempts: {last_exception}")
+    return None
 
 
 def truncate_text(text: Optional[str], max_chars: Optional[int] = None) -> Optional[str]:

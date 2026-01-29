@@ -68,9 +68,26 @@ class RuntimeConfig(BaseModel):
         default=None,
         description="Exa AI API key for web content extraction (x-api-key header)",
     )
+    exa_livecrawl: str = Field(
+        default="fallback",
+        description="Exa live crawl mode for contents API (e.g. fallback/always/never)",
+        pattern="^(fallback|always|never)$",
+    )
+    exa_livecrawl_timeout_ms: int = Field(
+        default=15000,
+        ge=1000,
+        le=120000,
+        description="Timeout in milliseconds for Exa live crawl (livecrawlTimeout)",
+    )
     exa_text_max_chars: int = Field(
         default=50000,
         description="Maximum characters to store for Exa extracted text (truncate if longer)",
+    )
+    exa_contents_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Number of retries for Exa contents API on failure (0 = no retries)",
     )
 
     # Parse/Content fetching (multi-provider with fallback)
