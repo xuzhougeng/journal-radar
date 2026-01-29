@@ -7,8 +7,6 @@
     <h1>Settings</h1>
 </div>
 
-<div id="result-message" class="message hidden"></div>
-
 <!-- Bark Push Notification -->
 <div class="card">
     <h2>Bark Push Notification</h2>
@@ -64,6 +62,27 @@
                 <label for="exa_text_max_chars">Max Text Characters</label>
                 <input type="number" id="exa_text_max_chars" name="exa_text_max_chars" value="{{ settings.exa_text_max_chars }}" min="1000" max="500000">
                 <span class="hint">Maximum characters to store (truncated if longer).</span>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="exa_livecrawl">Exa livecrawl mode</label>
+                <select id="exa_livecrawl" name="exa_livecrawl" class="form-select">
+                    <option value="fallback" {% if settings.exa_livecrawl == 'fallback' %}selected{% endif %}>fallback (recommended)</option>
+                    <option value="always" {% if settings.exa_livecrawl == 'always' %}selected{% endif %}>always</option>
+                    <option value="never" {% if settings.exa_livecrawl == 'never' %}selected{% endif %}>never (cache only)</option>
+                </select>
+                <span class="hint">If you see <code>CRAWL_LIVECRAWL_TIMEOUT</code>, try increasing timeout or switching mode.</span>
+            </div>
+            <div class="form-group">
+                <label for="exa_livecrawl_timeout_ms">Livecrawl timeout (ms)</label>
+                <input type="number" id="exa_livecrawl_timeout_ms" name="exa_livecrawl_timeout_ms" value="{{ settings.exa_livecrawl_timeout_ms }}" min="1000" max="120000" step="500">
+                <span class="hint">Timeout for live crawl requests. Default: 15000ms.</span>
+            </div>
+            <div class="form-group">
+                <label for="exa_contents_retries">Exa Retries</label>
+                <input type="number" id="exa_contents_retries" name="exa_contents_retries" value="{{ settings.exa_contents_retries }}" min="0" max="10">
+                <span class="hint">Number of retries on Exa API failure. Default: 2.</span>
             </div>
         </div>
         <div class="form-actions">
@@ -287,6 +306,9 @@ async function saveSettings(event, section) {
         const apiKey = form.exa_api_key.value.trim();
         if (apiKey) data.exa_api_key = apiKey;
         data.exa_text_max_chars = parseInt(form.exa_text_max_chars.value);
+        data.exa_livecrawl = form.exa_livecrawl.value;
+        data.exa_livecrawl_timeout_ms = parseInt(form.exa_livecrawl_timeout_ms.value);
+        data.exa_contents_retries = parseInt(form.exa_contents_retries.value);
         data.parse_min_text_chars = parseInt(form.parse_min_text_chars.value);
         const providerOrder = form.parse_providers_order.value;
         data.parse_providers_order = providerOrder.split(',');
@@ -429,13 +451,6 @@ async function testLlm() {
         resultSpan.textContent = '';
         showMessage('LLM test failed: ' + error.message, 'error');
     }
-}
-
-function showMessage(text, type) {
-    const msg = document.getElementById('result-message');
-    msg.textContent = text;
-    msg.className = `message message-${type}`;
-    setTimeout(() => msg.className = 'message hidden', 5000);
 }
 </script>
 {% endblock %}

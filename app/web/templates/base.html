@@ -32,6 +32,22 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- Global Message Modal (for long pages) -->
+    <div id="message-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="message-modal-title">Message</h2>
+                <button class="close-btn" onclick="hideMessageModal()" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="message-modal-text" class="message-modal-text"></div>
+            </div>
+            <div class="form-actions" style="padding: 0 1.5rem 1.5rem;">
+                <button type="button" class="btn btn-primary" onclick="hideMessageModal()">OK</button>
+            </div>
+        </div>
+    </div>
+
     <footer class="footer">
         <div class="container">
             <p>Journal Monitor v0.1.0</p>
@@ -60,6 +76,52 @@
             }
         }
 
+        // Global message modal helpers
+        let _messageModalTimer = null;
+
+        function hideMessageModal() {
+            if (_messageModalTimer) {
+                clearTimeout(_messageModalTimer);
+                _messageModalTimer = null;
+            }
+            const modal = document.getElementById('message-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function showMessage(text, type) {
+            if (_messageModalTimer) {
+                clearTimeout(_messageModalTimer);
+                _messageModalTimer = null;
+            }
+
+            const modal = document.getElementById('message-modal');
+            const title = document.getElementById('message-modal-title');
+            const body = document.getElementById('message-modal-text');
+            if (!modal || !title || !body) return;
+
+            // Reset classes
+            body.className = 'message-modal-text';
+
+            if (type === 'success') {
+                title.textContent = 'Success';
+                body.classList.add('message', 'message-success');
+            } else if (type === 'error') {
+                title.textContent = 'Error';
+                body.classList.add('message', 'message-error');
+            } else {
+                title.textContent = 'Message';
+                body.classList.add('message');
+            }
+
+            body.textContent = text;
+            modal.classList.remove('hidden');
+
+            // Auto-close success messages; keep errors until user closes.
+            if (type === 'success') {
+                _messageModalTimer = setTimeout(() => hideMessageModal(), 4000);
+            }
+        }
+
         // Confirm logout to avoid accidental clicks
         document.addEventListener('DOMContentLoaded', () => {
             const logoutLink = document.querySelector('a.nav-logout');
@@ -70,6 +132,24 @@
                 if (!ok) e.preventDefault();
             });
         });
+
+        // Close message modal when clicking the backdrop
+        document.addEventListener('click', function (e) {
+            const modal = document.getElementById('message-modal');
+            if (!modal || modal.classList.contains('hidden')) return;
+            if (e.target === modal) hideMessageModal();
+        });
+
+        // Close message modal on Escape (and don't trigger other Esc handlers)
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            const modal = document.getElementById('message-modal');
+            if (modal && !modal.classList.contains('hidden')) {
+                e.preventDefault();
+                e.stopPropagation();
+                hideMessageModal();
+            }
+        }, true);
     </script>
     {% block scripts %}{% endblock %}
 </body>

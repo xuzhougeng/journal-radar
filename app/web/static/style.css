@@ -690,6 +690,10 @@ p {
     padding: 1.5rem;
 }
 
+.modal-body {
+    padding: 1.5rem;
+}
+
 .close-btn {
     background: none;
     border: none;
@@ -772,6 +776,12 @@ p {
 
 .message-success { background: var(--success-50); color: var(--success-600); border: 1px solid var(--success-500); }
 .message-error { background: var(--danger-50); color: var(--danger-600); border: 1px solid var(--danger-500); }
+
+.message-modal-text {
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 
 /* Footer */
 .footer {

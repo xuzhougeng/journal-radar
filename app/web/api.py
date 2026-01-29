@@ -80,7 +80,10 @@ class SettingsResponse(BaseModel):
     bark_server_url: str
     # Exa
     exa_configured: bool
+    exa_livecrawl: str
+    exa_livecrawl_timeout_ms: int
     exa_text_max_chars: int
+    exa_contents_retries: int
     # Parse/Content fetching
     parse_providers_order: list[str]
     parse_min_text_chars: int
@@ -111,7 +114,13 @@ class SettingsUpdate(BaseModel):
     bark_server_url: Optional[str] = None
     # Exa
     exa_api_key: Optional[str] = None
+    exa_livecrawl: Optional[str] = Field(
+        default=None,
+        pattern="^(fallback|always|never)$",
+    )
+    exa_livecrawl_timeout_ms: Optional[int] = Field(default=None, ge=1000, le=120000)
     exa_text_max_chars: Optional[int] = Field(default=None, ge=1000, le=500000)
+    exa_contents_retries: Optional[int] = Field(default=None, ge=0, le=10)
     # Parse/Content fetching
     parse_providers_order: Optional[list[str]] = None
     parse_min_text_chars: Optional[int] = Field(default=None, ge=0, le=10000)
@@ -161,7 +170,10 @@ async def get_settings(
         bark_configured=bool(config.bark_device_key),
         bark_server_url=config.bark_server_url,
         exa_configured=bool(config.exa_api_key),
+        exa_livecrawl=config.exa_livecrawl,
+        exa_livecrawl_timeout_ms=config.exa_livecrawl_timeout_ms,
         exa_text_max_chars=config.exa_text_max_chars,
+        exa_contents_retries=config.exa_contents_retries,
         parse_providers_order=config.parse_providers_order,
         parse_min_text_chars=config.parse_min_text_chars,
         llm_configured=bool(config.llm_api_key),
@@ -202,8 +214,14 @@ async def update_settings(
         updates["bark_server_url"] = data.bark_server_url
     if data.exa_api_key is not None:
         updates["exa_api_key"] = data.exa_api_key if data.exa_api_key else None
+    if data.exa_livecrawl is not None:
+        updates["exa_livecrawl"] = data.exa_livecrawl
+    if data.exa_livecrawl_timeout_ms is not None:
+        updates["exa_livecrawl_timeout_ms"] = data.exa_livecrawl_timeout_ms
     if data.exa_text_max_chars is not None:
         updates["exa_text_max_chars"] = data.exa_text_max_chars
+    if data.exa_contents_retries is not None:
+        updates["exa_contents_retries"] = data.exa_contents_retries
     if data.parse_providers_order is not None:
         # Validate providers
         valid_providers = {"exa", "direct"}

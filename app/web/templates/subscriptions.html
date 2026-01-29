@@ -12,8 +12,6 @@
     </div>
 </div>
 
-<div id="result-message" class="message hidden"></div>
-
 {% if subscriptions %}
 <div class="table-container">
     <table class="table">
@@ -232,11 +230,5 @@ async function importSubscriptions(event) {
     }
 }
 
-function showMessage(text, type) {
-    const msg = document.getElementById('result-message');
-    msg.textContent = text;
-    msg.className = `message message-${type}`;
-    setTimeout(() => msg.className = 'message hidden', 5000);
-}
 </script>
 {% endblock %}

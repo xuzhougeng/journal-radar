@@ -229,12 +229,14 @@ async function openPreview(entryId, hasStructured = false) {
         const parseData = await apiCall(`/api/entries/${entryId}/parse/preview`);
         title.textContent = parseData.entry_title || 'Preview';
 
-        // Try to fetch LLM structured info (if available)
+        // Fetch LLM structured info only if we already have it
         let llmData = null;
-        try {
-            llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
-        } catch (e) {
-            // LLM data not available, that's fine
+        if (hasStructured) {
+            try {
+                llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
+            } catch (e) {
+                // LLM data not available, that's fine
+            }
         }
 
         content.innerHTML = renderPreviewContent(parseData, llmData, entryId);
