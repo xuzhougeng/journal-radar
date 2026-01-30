@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from app.db import get_db
 from app.models import Subscription, Entry, CheckRun, Notification
 from app.config import get_runtime_config, StaticConfig
-from app.web.auth import require_login_api
+from app.web.auth import require_login_api, is_logged_in
 
 router = APIRouter()
 
@@ -1013,12 +1013,19 @@ async def get_parse_preview(
     request: Request,
     entry_id: int,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(require_login_api),
 ):
-    """Get parsed content for preview sidebar. Supports multiple providers. Requires login."""
+    """
+    Get parsed content for preview sidebar. Supports multiple providers.
+    
+    Public endpoint - accessible without login for read-only preview.
+    When not logged in, raw_path and raw_data are omitted to avoid exposing
+    server paths and detailed fetch metadata.
+    """
     from pathlib import Path
     from sqlalchemy.orm import selectinload
     from app.models import EntryContent
+
+    logged_in = is_logged_in(request)
 
     # Get the entry with its content
     result = await db.execute(
@@ -1034,7 +1041,7 @@ async def get_parse_preview(
     provider = entry.content.provider
     raw_path = entry.content.raw_path
 
-    # Base response
+    # Base response (public fields)
     response = {
         "entry_id": entry_id,
         "entry_title": entry.title,
@@ -1044,51 +1051,54 @@ async def get_parse_preview(
         "title": entry.content.title,
         "author": entry.content.author,
         "url": entry.content.url,
-        "raw_path": raw_path,
     }
 
-    # Try to load raw data if available
-    if raw_path:
-        raw_filename = Path(raw_path).name
-        
-        # Determine the correct data directory based on provider
-        if provider == "exa":
-            # Try new path first, then legacy path
-            raw_file_path = StaticConfig.get_parse_data_dir("exa") / raw_filename
-            if not raw_file_path.exists():
-                raw_file_path = StaticConfig.get_exa_data_dir() / raw_filename
-        elif provider == "direct":
-            raw_file_path = StaticConfig.get_parse_data_dir("direct") / raw_filename
-        else:
-            raw_file_path = None
+    # Only include raw_path and raw_data for logged-in users
+    if logged_in:
+        response["raw_path"] = raw_path
 
-        if raw_file_path and raw_file_path.exists():
-            try:
-                with open(raw_file_path, "r", encoding="utf-8") as f:
-                    raw_data = json.load(f)
-                
-                # Provider-specific raw data formatting
-                if provider == "exa":
-                    response["raw_data"] = {
-                        "request_id": raw_data.get("requestId"),
-                        "results": raw_data.get("results", []),
-                        "statuses": raw_data.get("statuses", []),
-                        "cost_dollars": raw_data.get("costDollars"),
-                        "search_time": raw_data.get("searchTime"),
-                    }
-                elif provider == "direct":
-                    response["raw_data"] = {
-                        "url": raw_data.get("url"),
-                        "final_url": raw_data.get("final_url"),
-                        "fetched_at": raw_data.get("fetched_at"),
-                        "status_code": raw_data.get("status_code"),
-                        "content_type": raw_data.get("content_type"),
-                        "html_length": len(raw_data.get("html", "")),
-                    }
-                else:
-                    response["raw_data"] = raw_data
-            except Exception as e:
-                response["raw_data_error"] = str(e)
+        # Try to load raw data if available
+        if raw_path:
+            raw_filename = Path(raw_path).name
+            
+            # Determine the correct data directory based on provider
+            if provider == "exa":
+                # Try new path first, then legacy path
+                raw_file_path = StaticConfig.get_parse_data_dir("exa") / raw_filename
+                if not raw_file_path.exists():
+                    raw_file_path = StaticConfig.get_exa_data_dir() / raw_filename
+            elif provider == "direct":
+                raw_file_path = StaticConfig.get_parse_data_dir("direct") / raw_filename
+            else:
+                raw_file_path = None
+
+            if raw_file_path and raw_file_path.exists():
+                try:
+                    with open(raw_file_path, "r", encoding="utf-8") as f:
+                        raw_data = json.load(f)
+                    
+                    # Provider-specific raw data formatting
+                    if provider == "exa":
+                        response["raw_data"] = {
+                            "request_id": raw_data.get("requestId"),
+                            "results": raw_data.get("results", []),
+                            "statuses": raw_data.get("statuses", []),
+                            "cost_dollars": raw_data.get("costDollars"),
+                            "search_time": raw_data.get("searchTime"),
+                        }
+                    elif provider == "direct":
+                        response["raw_data"] = {
+                            "url": raw_data.get("url"),
+                            "final_url": raw_data.get("final_url"),
+                            "fetched_at": raw_data.get("fetched_at"),
+                            "status_code": raw_data.get("status_code"),
+                            "content_type": raw_data.get("content_type"),
+                            "html_length": len(raw_data.get("html", "")),
+                        }
+                    else:
+                        response["raw_data"] = raw_data
+                except Exception as e:
+                    response["raw_data_error"] = str(e)
 
     return response
 

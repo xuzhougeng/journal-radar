@@ -106,24 +106,34 @@
                 {% endif %}
                 <span class="entry-fetched">Fetched: {{ entry.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
-            {% if parse_enabled and logged_in %}
+            {% if parse_enabled %}
             <div class="entry-actions">
-                {% if entry.content %}
-                    <span class="badge badge-parse" title="Content via {{ entry.content.provider }}: {{ entry.content.text|length if entry.content.text else 0 }} chars">Parse ✓ ({{ entry.content.provider }})</span>
-                    {% if llm_configured %}
-                        {% if entry.structured %}
-                            <span class="badge badge-llm" title="Type: {{ entry.structured.site_type }}">LLM ✓</span>
-                        {% else %}
-                            <button class="btn btn-xs btn-llm" onclick="fetchLlm({{ entry.id }}, this)" title="Extract structure via LLM">LLM</button>
+                {% if logged_in %}
+                    {# Logged-in: full controls (Parse, LLM, Preview) #}
+                    {% if entry.content %}
+                        <span class="badge badge-parse" title="Content via {{ entry.content.provider }}: {{ entry.content.text|length if entry.content.text else 0 }} chars">Parse ✓ ({{ entry.content.provider }})</span>
+                        {% if llm_configured %}
+                            {% if entry.structured %}
+                                <span class="badge badge-llm" title="Type: {{ entry.structured.site_type }}">LLM ✓</span>
+                            {% else %}
+                                <button class="btn btn-xs btn-llm" onclick="fetchLlm({{ entry.id }}, this)" title="Extract structure via LLM">LLM</button>
+                            {% endif %}
                         {% endif %}
+                        <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }}, {{ 'true' if entry.structured else 'false' }})" title="Preview content">Preview</button>
+                    {% else %}
+                        <button class="btn btn-xs btn-parse" onclick="fetchParse({{ entry.id }}, this)" title="Fetch content via parse providers">Parse</button>
+                        {% if llm_configured %}
+                            <button class="btn btn-xs btn-llm" disabled title="Fetch content first">LLM</button>
+                        {% endif %}
+                        <button class="btn btn-xs btn-preview" disabled title="Fetch content first to enable preview">Preview</button>
                     {% endif %}
-                    <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }}, {{ 'true' if entry.structured else 'false' }})" title="Preview content">Preview</button>
                 {% else %}
-                    <button class="btn btn-xs btn-parse" onclick="fetchParse({{ entry.id }}, this)" title="Fetch content via parse providers">Parse</button>
-                    {% if llm_configured %}
-                        <button class="btn btn-xs btn-llm" disabled title="Fetch content first">LLM</button>
+                    {# Not logged in: read-only Preview only (if content exists) #}
+                    {% if entry.content %}
+                        <button class="btn btn-xs btn-preview" onclick="openPreview({{ entry.id }}, {{ 'true' if entry.structured else 'false' }})" title="Preview content (read-only)">Preview</button>
+                    {% else %}
+                        <button class="btn btn-xs btn-preview" disabled title="Content not yet fetched">Preview</button>
                     {% endif %}
-                    <button class="btn btn-xs btn-preview" disabled title="Fetch content first to enable preview">Preview</button>
                 {% endif %}
             </div>
             {% endif %}
@@ -326,6 +336,9 @@ async function fetchLlm(entryId, btn) {
     }
 }
 
+// Page-level login state (used by preview and other JS)
+const isLoggedIn = {{ 'true' if logged_in else 'false' }};
+
 // Preview drawer functions
 async function openPreview(entryId, hasStructured = false) {
     const backdrop = document.getElementById('preview-backdrop');
@@ -347,24 +360,28 @@ async function openPreview(entryId, hasStructured = false) {
     setTimeout(() => closeBtn.focus(), 100);
 
     try {
-        // Fetch parsed content
+        // Fetch parsed content (public endpoint)
         const parseData = await apiCall(`/api/entries/${entryId}/parse/preview`);
         title.textContent = parseData.entry_title || 'Preview';
 
-        // Fetch LLM structured info if available (ignore errors if missing)
+        // Fetch LLM structured info if available (requires login)
         let llmData = null;
-        try {
-            llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
-        } catch (e) {
-            // LLM data not available or not configured; ignore.
+        if (isLoggedIn) {
+            try {
+                llmData = await apiCall(`/api/entries/${entryId}/llm/preview`);
+            } catch (e) {
+                // LLM data not available or not configured; ignore.
+            }
         }
 
-        // Fetch type info (ignore errors if missing)
+        // Fetch type info (requires login)
         let typeData = null;
-        try {
-            typeData = await apiCall(`/api/entries/${entryId}/type`);
-        } catch (e) {
-            // Type info not available; ignore.
+        if (isLoggedIn) {
+            try {
+                typeData = await apiCall(`/api/entries/${entryId}/type`);
+            } catch (e) {
+                // Type info not available; ignore.
+            }
         }
 
         // Fetch tags (public endpoint, ignore errors)
@@ -384,7 +401,7 @@ async function openPreview(entryId, hasStructured = false) {
 
 function renderPreviewContent(parseData, llmData, typeData, tagsData, entryId) {
     let html = '';
-    const isLoggedIn = {{ 'true' if logged_in else 'false' }};
+    // Note: isLoggedIn is defined at page-level scope above
 
     // Tags section (always show)
     html += '<div class="preview-section preview-tags-section">';
@@ -470,22 +487,24 @@ function renderPreviewContent(parseData, llmData, typeData, tagsData, entryId) {
         html += '</div>';
     }
     
-    // Type editor
-    html += '<div class="preview-meta-item preview-type-editor">';
-    html += '<strong>Override:</strong> ';
-    html += `<select id="type-select-${entryId}" class="type-select">`;
-    html += `<option value="">-- No override --</option>`;
-    for (const t of validTypes) {
-        const selected = (userType === t) ? 'selected' : '';
-        html += `<option value="${t}" ${selected}>${t}</option>`;
+    // Type editor (only for logged-in users)
+    if (isLoggedIn) {
+        html += '<div class="preview-meta-item preview-type-editor">';
+        html += '<strong>Override:</strong> ';
+        html += `<select id="type-select-${entryId}" class="type-select">`;
+        html += `<option value="">-- No override --</option>`;
+        for (const t of validTypes) {
+            const selected = (userType === t) ? 'selected' : '';
+            html += `<option value="${t}" ${selected}>${t}</option>`;
+        }
+        html += '</select>';
+        html += `<input type="text" id="type-reason-${entryId}" class="type-reason-input" placeholder="Reason (optional)" value="${escapeHtml(typeData?.user_reason || '')}">`;
+        html += `<button class="btn btn-xs btn-primary" onclick="saveUserType(${entryId})">Save</button>`;
+        if (userType) {
+            html += `<button class="btn btn-xs btn-danger" onclick="clearUserType(${entryId})">Clear</button>`;
+        }
+        html += '</div>';
     }
-    html += '</select>';
-    html += `<input type="text" id="type-reason-${entryId}" class="type-reason-input" placeholder="Reason (optional)" value="${escapeHtml(typeData?.user_reason || '')}">`;
-    html += `<button class="btn btn-xs btn-primary" onclick="saveUserType(${entryId})">Save</button>`;
-    if (userType) {
-        html += `<button class="btn btn-xs btn-danger" onclick="clearUserType(${entryId})">Clear</button>`;
-    }
-    html += '</div>';
     
     html += '</div>';
     html += '</div>';
@@ -495,7 +514,10 @@ function renderPreviewContent(parseData, llmData, typeData, tagsData, entryId) {
         html += '<div class="preview-section preview-structured">';
         html += '<div class="preview-section-header">';
         html += '<span class="preview-text-header">LLM Summary</span>';
-        html += `<button class="btn btn-xs" onclick="rerunLlm(${entryId})" title="Re-run LLM extraction">Re-run</button>`;
+        // Re-run button only for logged-in users
+        if (isLoggedIn) {
+            html += `<button class="btn btn-xs" onclick="rerunLlm(${entryId})" title="Re-run LLM extraction">Re-run</button>`;
+        }
         html += '</div>';
         html += '<div class="preview-meta">';
         if (llmData.model) {
@@ -507,10 +529,14 @@ function renderPreviewContent(parseData, llmData, typeData, tagsData, entryId) {
         }
         html += '</div>';
     } else {
-        // Show button to generate structured info
+        // Show message/button for generating structured info
         html += '<div class="preview-section preview-structured-empty">';
         html += '<div class="preview-text-header">LLM Summary</div>';
-        html += `<p class="hint">No LLM summary available. <button class="btn btn-xs btn-llm" onclick="generateLlmInPreview(${entryId})">Generate with LLM</button></p>`;
+        if (isLoggedIn) {
+            html += `<p class="hint">No LLM summary available. <button class="btn btn-xs btn-llm" onclick="generateLlmInPreview(${entryId})">Generate with LLM</button></p>`;
+        } else {
+            html += `<p class="hint">No LLM summary available. Login to generate.</p>`;
+        }
         html += '</div>';
     }
 

@@ -234,7 +234,11 @@ async def entries_page(
 
 @router.get("/tags", response_class=HTMLResponse)
 async def tags_page(request: Request, db: AsyncSession = Depends(get_db)):
-    """Tags browsing page. Publicly accessible."""
+    """Tags browsing page. Requires login."""
+    redirect = require_login_redirect(request)
+    if redirect:
+        return redirect
+
     from app.models import Tag, entry_tags
 
     # Query all tags with entry counts
