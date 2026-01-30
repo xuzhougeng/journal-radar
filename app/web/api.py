@@ -351,7 +351,7 @@ async def list_subscriptions(
     ]
 
 
-@router.get("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+@router.get("/subscriptions/{subscription_id:int}", response_model=SubscriptionResponse)
 async def get_subscription(
     request: Request,
     subscription_id: int,
@@ -410,7 +410,7 @@ async def create_subscription(
     )
 
 
-@router.patch("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+@router.patch("/subscriptions/{subscription_id:int}", response_model=SubscriptionResponse)
 async def update_subscription(
     request: Request,
     subscription_id: int,
@@ -473,7 +473,7 @@ async def update_subscription(
     )
 
 
-@router.delete("/subscriptions/{subscription_id}")
+@router.delete("/subscriptions/{subscription_id:int}")
 async def delete_subscription(
     request: Request,
     subscription_id: int,
@@ -495,7 +495,7 @@ async def delete_subscription(
     return {"status": "deleted", "id": subscription_id}
 
 
-@router.patch("/subscriptions/{subscription_id}/toggle")
+@router.patch("/subscriptions/{subscription_id:int}/toggle")
 async def toggle_subscription(
     request: Request,
     subscription_id: int,
@@ -517,7 +517,7 @@ async def toggle_subscription(
     return {"status": "toggled", "id": subscription_id, "enabled": subscription.enabled}
 
 
-@router.post("/subscriptions/{subscription_id}/test")
+@router.post("/subscriptions/{subscription_id:int}/test")
 async def test_subscription(
     request: Request,
     subscription_id: int,
