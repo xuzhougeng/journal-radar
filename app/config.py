@@ -3,6 +3,7 @@ Configuration management for Journal Monitor.
 Runtime configuration is stored in the database and cached in-process.
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -173,6 +174,10 @@ class StaticConfig:
     DEBUG: bool = False
     DATABASE_URL: str = "sqlite+aiosqlite:///data/journal_monitor.sqlite3"
     DATA_DIR: Path = Path("data")
+
+    # Session cookie security: set HTTPS_ONLY=false for plain HTTP deployments
+    # Default: True (secure-by-default, requires HTTPS)
+    SESSION_COOKIE_HTTPS_ONLY: bool = os.getenv("HTTPS_ONLY", "true").lower() in ("true", "1", "yes")
 
     @classmethod
     def get_exa_data_dir(cls) -> Path:

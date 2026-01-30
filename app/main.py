@@ -54,11 +54,12 @@ app = FastAPI(
 )
 
 # Add session middleware with file-based secret (always enabled now)
+# Set HTTPS_ONLY=false env var for plain HTTP deployments
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_session_secret(),
     same_site="lax",
-    https_only=not StaticConfig.DEBUG,
+    https_only=StaticConfig.SESSION_COOKIE_HTTPS_ONLY,
 )
 
 # Mount static files
