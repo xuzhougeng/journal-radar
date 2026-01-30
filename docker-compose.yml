@@ -1,0 +1,18 @@
+services:
+  journal-monitor:
+    build: .
+    container_name: journal-monitor
+    restart: unless-stopped
+    environment:
+      # If you terminate TLS at a reverse proxy and talk plain HTTP to the container:
+      - HTTPS_ONLY=false
+      # Optional: make logs more/less verbose
+      # - LOG_LEVEL=info
+      # Optional: set timezone inside container
+      # - TZ=Asia/Shanghai
+    ports:
+      # Recommended: bind to localhost and put Nginx/Caddy in front
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Persist DB + session secret + parse/exa raw data
+      - ./data:/data

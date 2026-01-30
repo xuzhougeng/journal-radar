@@ -1,141 +1,144 @@
 # 如何部署
 
-## CentOS 7 搭配宝塔面板
-
-通过宝塔面板安装python 3.12
+> 不建议在CentOS 7里面部署项目，你只会收获痛苦
 
 
-获取代码:
-
-从 <https://github.com/xuzhougeng/journal-radar.git> 下载zip文件，上传到服务器
+推荐流程：**本地构建镜像** → **上传到服务器** → **服务器加载镜像** → 用 **docker compose / systemd** 管理运行。
 
 
-创建虚拟环境并安装依赖
-
-```bash
-/www/server/pyporject_evn/versions/3.12.0/bin/python3  -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-CentOS 7的机器安装 greenlet 编译阶段会报错，只能安装二进制
-
-```bash
-python -m pip install --only-binary=:all: greenlet
-```
-
-先确保能够正常的启动，首次启动会在控制台打印管理员账号与密码。
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-会有如下输出，其中Password是密码
-
-```bash
-2026-01-30 09:44:47.346 | INFO | app.config_store | FIRST TIME SETUP - ADMIN CREDENTIALS
-2026-01-30 09:44:47.346 | INFO | app.config_store | ============================================================
-2026-01-30 09:44:47.346 | INFO | app.config_store | Username: admin
-2026-01-30 09:44:47.346 | INFO | app.config_store | Password: vou3kC9tcNhmmdKP
-2026-01-30 09:44:47.346 | INFO | app.config_store | ============================================================
-```
-
-如果没看到可以重置密码
-
-```bash
-python -m app.cli reset-password
-```
-
-
-## 用 systemd 管理进程
-
-创建服务文件：
-
-```bash
-sudo tee /etc/systemd/system/journal-radar.service >/dev/null <<'EOF'
-[Unit]
-Description=Journal Radar
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/journal-radar
-Environment=HTTPS_ONLY=false
-ExecStart=/opt/journal-radar/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-Restart=always
-RestartSec=3
-User=www
-Group=www
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-建议将代码放到 `/opt/journal-radar`，并赋予权限：
-
-```bash
-sudo mkdir -p /opt/journal-radar
-sudo rsync -a --delete ./ /opt/journal-radar/
-sudo chown -R www:www /opt/journal-radar
-```
-
-启动服务：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now journal-radar
-sudo systemctl status journal-radar
-```
-重置密码后需要重启服务
-
-```bash
-sudo systemctl restart journal-radar
-```
-
-查看日志：
-
-```bash
-sudo journalctl -u journal-radar -f
-```
-
-## 数据与配置
-
-- 数据库与 session secret 在 `data/` 目录（默认自动创建）
-- 配置通过 Web UI 管理，无需 `.env`
-- 建议定期备份 `data/` 目录
-
-## Docker / Docker Compose 部署（推荐，解决 CentOS 7 旧 SQLite 问题）
-
-该方案把运行环境（Python/SQLite）都放到容器里，宿主机只需要 Docker。
+该方案把运行环境（Python/SQLite）都放到容器里，服务器无需安装 Python/SQLite。
 数据库与所有运行数据仍然落在项目目录下的 `data/`（通过 volume 挂载持久化）。
 
-### 1) 准备目录
+
+## 服务器上安装docker
+
+```bash
+sudo yum install -y yum-utils device-mapper-persistent-data lvm2
+
+sudo yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+
+sudo yum install -y docker-ce docker-ce-cli containerd.io
+
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+查看版本
+
+```bash
+sudo docker version
+```
+
+
+## 本地构建Docker镜像
+
+
+在项目根目录执行（自行替换 tag，例如 `20260130`）：
+
+```bash
+docker build -t journal-monitor:20260130 .
+```
+
+本地测试（建议先验证能启动再导出上传）：
+
+```bash
+mkdir -p data
+docker run --rm -it \
+  -p 8000:8000 \
+  -e HTTPS_ONLY=false \
+  -v "$(pwd)/data:/data" \
+  journal-monitor:20260130
+```
+
+验证健康检查：
+
+```bash
+curl -sS http://127.0.0.1:8000/healthz
+```
+
+导出镜像为 tar 包：
+
+```bash
+docker save -o journal-monitor_20260130.tar journal-monitor:20260130
+```
+
+## 上传到服务器并加载
+
+使用scp或者FileZilla等工具
+
+```bash
+scp journal-monitor_20260130.tar root@<YOUR_SERVER>:/tmp/
+```
+
+## 服务器加载镜像
+
+在服务器上加载：
+
+```bash
+cd /tmp
+sudo docker load -i journal-monitor_20260130.tar
+sudo docker images | grep journal-monitor
+```
+
+## 服务器部署
+
+准备运行目录（服务器）
 
 建议放到 `/opt/journal-monitor`：
 
 ```bash
 sudo mkdir -p /opt/journal-monitor
-sudo rsync -a --delete ./ /opt/journal-monitor/
 sudo mkdir -p /opt/journal-monitor/data
-sudo chown -R $USER:$USER /opt/journal-monitor
-cd /opt/journal-monitor
 ```
 
-### 2) 启动（构建并后台运行）
+在 `/opt/journal-monitor/`，新建 `docker-compose.yml` ，内容如下
+
+```yaml
+services:
+  journal-monitor:
+    image: journal-monitor:20260130
+    container_name: journal-monitor-20260130
+    restart: unless-stopped
+    environment:
+      - HTTPS_ONLY=false
+      # - LOG_LEVEL=info
+      # - TZ=Asia/Shanghai
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data
+```
+
+### 启动Docker服务
 
 ```bash
-docker compose up -d --build
+cd /opt/journal-monitor
+docker compose up -d
 docker compose ps
 ```
 
-首次启动同样会在日志里打印管理员账号/密码：
+首次启动同样会在日志里打印管理员账号/密码。
 
 ```bash
-docker compose logs -f journal-monitor
+sudo docker compose logs -f journal-monitor
+
+## 日志信息
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | #============================================================
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | FIRST TIME SETUP - ADMIN CREDENTIALS
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | #============================================================
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | Username: admin
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | Password: cR5dj4xBdqoGlkEg
+#journal-monitor-20260130  | 2026-01-30 03:27:09.958 | INFO | app.config_store | ============================================================
 ```
 
-### 3) 反向代理（Nginx / BT 面板）
+
+数据路径:
+
+- 数据库与 session secret 在 `data/` 目录（默认自动创建）
+- 配置通过 Web UI 管理，无需 `.env`
+- 建议定期备份 `data/` 目录
+
+## 反向代理（Nginx / BT 面板）
 
 容器默认只监听 `127.0.0.1:8000`，建议在宿主机 Nginx/宝塔里做反代到：
 
@@ -143,59 +146,19 @@ docker compose logs -f journal-monitor
 
 如果你是 HTTPS（强烈建议），保持默认即可；如果你明确要纯 HTTP，请确保容器里设置了 `HTTPS_ONLY=false`（`docker-compose.yml` 已默认设置）。
 
-### 4) 用 systemd 托管 docker compose（可选）
-
-创建 `/etc/systemd/system/journal-monitor.service`：
-
-```bash
-sudo tee /etc/systemd/system/journal-monitor.service >/dev/null <<'EOF'
-[Unit]
-Description=Journal Monitor (Docker Compose)
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/journal-monitor
-RemainAfterExit=yes
-ExecStart=/usr/bin/docker compose up -d --build
-ExecStop=/usr/bin/docker compose down
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-启用并启动：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now journal-monitor
-sudo systemctl status journal-monitor
-```
-
-查看日志：
-
-```bash
-cd /opt/journal-monitor
-docker compose logs -f journal-monitor
-```
-
-## 通过BT配置 Nginx 反向代理
 
 
 ## 网页配置
 
-首先到 /subscriptions 页面 添加你感兴趣的期刊
+步骤如下:
 
-接着到 exa.AI 申请API
+1. /subscriptions 页面 添加你感兴趣的期刊
+1. /Dashboard 点击Run Check Now
+1. /settings 按需配置
 
-到 /settings 页面的Parse/Content Fetching 填写EXA API KEY.
 
-到Dashboard 点击Run Check Now
-
-- Parse/Content Fetching
-
-- Bark Push Notification
-
+Setting配置内容
+- Change Password 修改密码，更好记一点
+- Parse/Content Fetching: 填写EXA API KEY. 依赖于 exa.AI 申请API. 如果
+- Bark Push Notification: iOS系统的Bark提示
+- LLM Structured Extraction: 通过LLM进行内容的解析
