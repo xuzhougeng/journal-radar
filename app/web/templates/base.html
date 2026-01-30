@@ -14,7 +14,10 @@
     <nav class="navbar">
         <div class="container">
             <a href="/entries" class="logo">Journal Monitor</a>
-            <ul class="nav-links">
+            <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">
+                <span class="nav-toggle-icon"></span>
+            </button>
+            <ul class="nav-links" id="nav-links">
                 <li><a href="/entries" {% if request.url.path == "/entries" %}class="active"{% endif %}>Entries</a></li>
                 <li><a href="/tags" {% if request.url.path == "/tags" %}class="active"{% endif %}>Tags</a></li>
                 {% if logged_in %}
@@ -122,6 +125,29 @@
                 _messageModalTimer = setTimeout(() => hideMessageModal(), 4000);
             }
         }
+
+        // Mobile nav toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const navToggle = document.getElementById('nav-toggle');
+            const navLinks = document.getElementById('nav-links');
+            
+            if (navToggle && navLinks) {
+                navToggle.addEventListener('click', () => {
+                    const isOpen = navLinks.classList.toggle('is-open');
+                    navToggle.classList.toggle('is-open', isOpen);
+                    navToggle.setAttribute('aria-expanded', isOpen);
+                });
+                
+                // Close menu when clicking a link
+                navLinks.querySelectorAll('a').forEach(link => {
+                    link.addEventListener('click', () => {
+                        navLinks.classList.remove('is-open');
+                        navToggle.classList.remove('is-open');
+                        navToggle.setAttribute('aria-expanded', 'false');
+                    });
+                });
+            }
+        });
 
         // Confirm logout to avoid accidental clicks
         document.addEventListener('DOMContentLoaded', () => {

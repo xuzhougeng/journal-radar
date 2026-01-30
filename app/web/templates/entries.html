@@ -98,14 +98,16 @@
             {% endif %}
         </div>
         <div class="entry-footer">
-            {% if entry.published_at %}
-                <span class="entry-date {% if today_date and entry.published_at.date() == today_date %}entry-date-today{% endif %}">
-                    Published: {{ entry.published_at.strftime('%Y-%m-%d') }}
-                </span>
-            {% endif %}
-            <span class="entry-fetched">Fetched: {{ entry.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
-            <div style="flex: 1;"></div> <!-- Spacer -->
+            <div class="entry-times">
+                {% if entry.published_at %}
+                    <span class="entry-date {% if today_date and entry.published_at.date() == today_date %}entry-date-today{% endif %}">
+                        Published: {{ entry.published_at.strftime('%Y-%m-%d') }}
+                    </span>
+                {% endif %}
+                <span class="entry-fetched">Fetched: {{ entry.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
             {% if parse_enabled and logged_in %}
+            <div class="entry-actions">
                 {% if entry.content %}
                     <span class="badge badge-parse" title="Content via {{ entry.content.provider }}: {{ entry.content.text|length if entry.content.text else 0 }} chars">Parse ✓ ({{ entry.content.provider }})</span>
                     {% if llm_configured %}
@@ -123,6 +125,7 @@
                     {% endif %}
                     <button class="btn btn-xs btn-preview" disabled title="Fetch content first to enable preview">Preview</button>
                 {% endif %}
+            </div>
             {% endif %}
         </div>
     </div>
@@ -135,17 +138,42 @@
     </div>
     <div class="pagination-actions">
         {% if page > 1 %}
-            <a class="btn btn-sm" href="#" data-page="{{ page - 1 }}" data-direction="prev" onclick="navigatePage({{ page - 1 }}); return false;">Previous</a>
+            <a class="btn btn-sm" href="#" data-page="{{ page - 1 }}" data-direction="prev" onclick="navigatePage({{ page - 1 }}); return false;"><span class="pagination-arrow">←</span> Previous</a>
         {% else %}
-            <span class="btn btn-sm" style="opacity:0.5;cursor:not-allowed;">Previous</span>
+            <span class="btn btn-sm btn-disabled"><span class="pagination-arrow">←</span> Previous</span>
         {% endif %}
 
         {% if page < total_pages %}
-            <a class="btn btn-sm btn-primary" href="#" data-page="{{ page + 1 }}" data-direction="next" onclick="navigatePage({{ page + 1 }}); return false;">Next</a>
+            <a class="btn btn-sm btn-primary" href="#" data-page="{{ page + 1 }}" data-direction="next" onclick="navigatePage({{ page + 1 }}); return false;">Next <span class="pagination-arrow">→</span></a>
         {% else %}
-            <span class="btn btn-sm btn-primary" style="opacity:0.5;cursor:not-allowed;">Next</span>
+            <span class="btn btn-sm btn-primary btn-disabled">Next <span class="pagination-arrow">→</span></span>
         {% endif %}
     </div>
+</div>
+
+<!-- Mobile fixed pagination bar -->
+<div class="pagination-mobile">
+    {% if page > 1 %}
+        <a class="pagination-mobile-btn" href="#" onclick="navigatePage({{ page - 1 }}); return false;" aria-label="Previous page">
+            <span class="pagination-mobile-arrow">←</span>
+        </a>
+    {% else %}
+        <span class="pagination-mobile-btn disabled" aria-hidden="true">
+            <span class="pagination-mobile-arrow">←</span>
+        </span>
+    {% endif %}
+    
+    <span class="pagination-mobile-info">{{ page }} / {{ total_pages }}</span>
+    
+    {% if page < total_pages %}
+        <a class="pagination-mobile-btn" href="#" onclick="navigatePage({{ page + 1 }}); return false;" aria-label="Next page">
+            <span class="pagination-mobile-arrow">→</span>
+        </a>
+    {% else %}
+        <span class="pagination-mobile-btn disabled" aria-hidden="true">
+            <span class="pagination-mobile-arrow">→</span>
+        </span>
+    {% endif %}
 </div>
 {% else %}
 <div class="empty-state">
@@ -721,20 +749,23 @@ document.addEventListener('keydown', function(e) {
     
     // Skip if preview drawer is open
     const drawer = document.getElementById('preview-drawer');
-    if (drawer && !drawer.classList.contains('hidden')) {
+    if (drawer && drawer.classList.contains('is-open')) {
         return;
     }
     
     // Arrow keys for pagination
+    // Check both desktop (.pagination-actions) and mobile (.pagination-mobile) elements
     if (e.key === 'ArrowLeft') {
-        const prevLink = document.querySelector('.pagination-actions a[data-direction="prev"][data-page]');
-        if (prevLink && prevLink.dataset.page) {
-            navigatePage(parseInt(prevLink.dataset.page, 10));
+        const prevLink = document.querySelector('.pagination-actions a[data-direction="prev"]') ||
+                         document.querySelector('.pagination-mobile-btn[aria-label="Previous page"]');
+        if (prevLink) {
+            prevLink.click();
         }
     } else if (e.key === 'ArrowRight') {
-        const nextLink = document.querySelector('.pagination-actions a[data-direction="next"][data-page]');
-        if (nextLink && nextLink.dataset.page) {
-            navigatePage(parseInt(nextLink.dataset.page, 10));
+        const nextLink = document.querySelector('.pagination-actions a[data-direction="next"]') ||
+                         document.querySelector('.pagination-mobile-btn[aria-label="Next page"]');
+        if (nextLink) {
+            nextLink.click();
         }
     }
 });
