@@ -131,6 +131,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add global auth middleware (must be inside SessionMiddleware so session is available)
+# This ensures all non-public web pages require login
+app.add_middleware(GlobalAuthMiddleware)
+
 # Add session middleware with file-based secret (always enabled now)
 # Set HTTPS_ONLY=false env var for plain HTTP deployments
 app.add_middleware(
@@ -139,10 +143,6 @@ app.add_middleware(
     same_site="lax",
     https_only=StaticConfig.SESSION_COOKIE_HTTPS_ONLY,
 )
-
-# Add global auth middleware (after SessionMiddleware so session is available)
-# This ensures all non-public web pages require login
-app.add_middleware(GlobalAuthMiddleware)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/web/static"), name="static")
