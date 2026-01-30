@@ -138,6 +138,39 @@ sudo docker compose logs -f journal-monitor
 - 配置通过 Web UI 管理，无需 `.env`
 - 建议定期备份 `data/` 目录
 
+### 更新服务
+
+导入新的image, 例如journal-monitor_20260131.tar
+
+```bash
+sudo docker load -i journal-monitor_20260131.tar
+```
+
+
+然后修改docker-compose.yml
+
+```yaml
+services:
+  journal-monitor:
+    image: journal-monitor:20260131
+    container_name: journal-monitor-20260131
+    restart: unless-stopped
+    environment:
+      - HTTPS_ONLY=false
+      # - LOG_LEVEL=info
+      # - TZ=Asia/Shanghai
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data
+```
+
+
+```bash
+sudo docker compose down
+sudo docker compose up -d
+```
+
 ## 反向代理（Nginx / BT 面板）
 
 容器默认只监听 `127.0.0.1:8000`，建议在宿主机 Nginx/宝塔里做反代到：
