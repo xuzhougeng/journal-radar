@@ -77,6 +77,74 @@ class BarkNotifier:
             logger.error(f"Failed to send Bark notification: {e}")
             return False
 
+    async def notify_digest(
+        self,
+        journal_counts: dict[str, int],
+        check_run_id: Optional[int] = None,
+    ) -> int:
+        """
+        Send a single digest notification summarizing all journal updates.
+
+        Args:
+            journal_counts: Dict of journal_name -> new_entry_count (only journals with updates)
+            check_run_id: Optional check run ID for logging
+
+        Returns:
+            1 if notification sent successfully, 0 otherwise
+        """
+        if not journal_counts:
+            return 0
+
+        if not self.device_key:
+            logger.warning("Bark device key not configured, skipping digest notification")
+            return 0
+
+        # Calculate totals
+        total_articles = sum(journal_counts.values())
+        journal_count = len(journal_counts)
+
+        # Build title
+        title = f"期刊更新：{total_articles} 篇（{journal_count} 个期刊）"
+
+        # Build body: sort by count descending, then alphabetically
+        config = get_runtime_config()
+        max_lines = config.push_max_entries_per_message
+
+        sorted_journals = sorted(
+            journal_counts.items(),
+            key=lambda x: (-x[1], x[0])  # descending count, then alphabetical
+        )
+
+        lines = []
+        for i, (journal_name, count) in enumerate(sorted_journals[:max_lines]):
+            lines.append(f"{i + 1}) {journal_name}: {count}")
+
+        if len(sorted_journals) > max_lines:
+            remaining = len(sorted_journals) - max_lines
+            lines.append(f"... and {remaining} more")
+
+        body = "\n".join(lines)
+
+        # Send the digest notification
+        sent = await self.send(
+            title=title,
+            body=body,
+            url=None,
+            group="Journal Digest",
+        )
+
+        if sent:
+            await self._record_notification(
+                check_run_id=check_run_id,
+                title=title,
+                body=body,
+                url=None,
+                success=True,
+            )
+            return 1
+
+        return 0
+
     async def notify_new_entries(
         self,
         journal_name: str,
@@ -84,7 +152,10 @@ class BarkNotifier:
         check_run_id: Optional[int] = None,
     ) -> int:
         """
-        Send notifications for new entries.
+        Send notifications for new entries (legacy per-journal method).
+
+        Note: This method is kept for backward compatibility but is no longer
+        used by the main check runner. Use notify_digest() instead.
 
         Args:
             journal_name: Name of the journal/subscription

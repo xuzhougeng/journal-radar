@@ -162,17 +162,14 @@
 <!-- Push Behavior -->
 <div class="card">
     <h2>Push Behavior</h2>
+    <p class="hint" style="margin-bottom: 15px;">
+        每次检查完成后，系统会发送一条汇总通知，列出所有有更新的期刊及其新增论文数量。
+    </p>
     <form id="push-form" onsubmit="saveSettings(event, 'push')">
         <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="push_merge_entries" name="push_merge_entries" {% if settings.push_merge_entries %}checked{% endif %}>
-                Merge multiple entries into one notification per journal
-            </label>
-        </div>
-        <div class="form-group">
-            <label for="push_max_entries_per_message">Max Entries per Message</label>
+            <label for="push_max_entries_per_message">Max Journals in Digest</label>
             <input type="number" id="push_max_entries_per_message" name="push_max_entries_per_message" value="{{ settings.push_max_entries_per_message }}" min="1" max="50">
-            <span class="hint">Maximum number of article titles to include in a merged notification.</span>
+            <span class="hint">Maximum number of journals to list in the digest notification (sorted by article count).</span>
         </div>
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">Save Push Settings</button>
@@ -324,7 +321,6 @@ async function saveSettings(event, section) {
         data.check_minute = parseInt(form.check_minute.value);
         data.timezone = form.timezone.value.trim();
     } else if (section === 'push') {
-        data.push_merge_entries = form.push_merge_entries.checked;
         data.push_max_entries_per_message = parseInt(form.push_max_entries_per_message.value);
     } else if (section === 'http') {
         data.request_timeout = parseInt(form.request_timeout.value);

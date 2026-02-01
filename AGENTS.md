@@ -8,13 +8,13 @@ The application lives in `app/` and is a FastAPI service with a small web UI. Ke
 - `app/db.py`: SQLAlchemy database setup and session management.
 - `app/models.py`: SQLAlchemy ORM models (Subscription, Entry, Run, Config).
 - `app/scheduler.py`: APScheduler integration for scheduled journal checks.
-- `app/runner.py`: Core check runner logic that orchestrates source fetching and notifications.
+- `app/runner.py`: Core check runner logic that orchestrates source fetching and notifications. Sends a single digest notification per check run summarizing all journal updates.
 - `app/exa_ai.py`: Optional Exa AI integration for web content extraction.
 - `app/logging_config.py`: Application-wide logging configuration.
 - `app/cli.py`: Command-line utilities (e.g., `reset-password`).
 - `app/web/`: web pages (`templates/`) and API endpoints (`api.py`, `routes.py`, `auth.py`).
 - `app/sources/`: RSS and Crossref source implementations (`base.py`, `rss.py`, `crossref.py`).
-- `app/notifier/`: Bark push notification integration.
+- `app/notifier/`: Bark push notification integration. Uses digest mode: one notification per check run with format "期刊更新：X 篇（Y 个期刊）", listing journals sorted by new entry count (descending).
 - `data/`: SQLite database files (auto-created at runtime).
 - `docs/how_to_deploy.md`: Deployment notes (CentOS/BT, systemd, data backup).
 - `docs/sql_table.md`: SQLite table/schema reference with code pointers.
@@ -63,6 +63,12 @@ summary and a test plan or verification steps.
 - Admin password can be reset via CLI: `python -m app.cli reset-password` (keeps data intact).
 - If running under a process manager (e.g. systemd), restart the service after resetting password or changing config to ensure the running process uses the latest values.
 - Session secrets are stored in `data/.session_secret` (auto-generated, gitignored).
+
+## Notification Behavior
+- Bark push notifications use digest mode: one notification per check run summarizing all journal updates.
+- Notification format: title "期刊更新：X 篇（Y 个期刊）" with body listing journals sorted by new entry count (descending).
+- Maximum number of journals shown in digest is controlled by `push_max_entries_per_message` setting (default: 10).
+- The legacy `notify_new_entries()` method exists for backward compatibility but is no longer used by the main check runner.
 
 ## Deployment Notes (Ops)
 - See `docs/how_to_deploy.md` for a concrete CentOS 7 + BT panel setup, including a sample systemd unit and data backup reminders.

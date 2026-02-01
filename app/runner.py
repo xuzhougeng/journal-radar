@@ -389,33 +389,36 @@ async def run_check() -> dict[str, Any]:
                     logger.error(error_msg)
                     errors.append(error_msg)
 
-            # Send notifications for new entries
-            for sub_id, new_entries in subscription_new_entries.items():
-                sub_result = await session.execute(
-                    select(Subscription).where(Subscription.id == sub_id)
-                )
-                subscription = sub_result.scalar_one()
-
+            # Send a single digest notification for all new entries
+            if subscription_new_entries:
                 try:
-                    sent = await notifier.notify_new_entries(
-                        subscription.name, new_entries, check_run.id
-                    )
-                    total_notifications += sent
+                    # Build journal_counts: name -> count
+                    journal_counts: dict[str, int] = {}
 
-                    # Mark entries as notified
-                    for entry in new_entries:
-                        await session.execute(
-                            Entry.__table__.update()
-                            .where(Entry.fingerprint == entry.fingerprint)
-                            .where(Entry.subscription_id == sub_id)
-                            .values(notified=True)
+                    for sub_id, new_entries in subscription_new_entries.items():
+                        sub_result = await session.execute(
+                            select(Subscription).where(Subscription.id == sub_id)
                         )
+                        subscription = sub_result.scalar_one()
+                        journal_counts[subscription.name] = len(new_entries)
+
+                    # Send one digest notification
+                    sent = await notifier.notify_digest(journal_counts, check_run.id)
+                    total_notifications = sent
+
+                    # Mark all entries as notified
+                    for sub_id, new_entries in subscription_new_entries.items():
+                        for entry in new_entries:
+                            await session.execute(
+                                Entry.__table__.update()
+                                .where(Entry.fingerprint == entry.fingerprint)
+                                .where(Entry.subscription_id == sub_id)
+                                .values(notified=True)
+                            )
                     await session.commit()
 
                 except Exception as e:
-                    logger.error(
-                        f"Error sending notification for '{subscription.name}': {e}"
-                    )
+                    logger.error(f"Error sending digest notification: {e}")
                     errors.append(str(e))
 
             # Update check run record
