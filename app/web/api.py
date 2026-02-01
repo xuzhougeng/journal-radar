@@ -85,6 +85,7 @@ class PushTestRequest(BaseModel):
 class SettingsResponse(BaseModel):
     """Response model for settings (excludes sensitive data)."""
     # Bark
+    bark_enabled: bool
     bark_configured: bool
     bark_server_url: str
     # Exa
@@ -97,6 +98,7 @@ class SettingsResponse(BaseModel):
     parse_providers_order: list[str]
     parse_min_text_chars: int
     # LLM
+    llm_auto_extract: bool
     llm_configured: bool
     llm_base_url: str
     llm_model: str
@@ -119,6 +121,7 @@ class SettingsResponse(BaseModel):
 class SettingsUpdate(BaseModel):
     """Request model for updating settings."""
     # Bark (optional - only update if provided)
+    bark_enabled: Optional[bool] = None
     bark_device_key: Optional[str] = None
     bark_server_url: Optional[str] = None
     # Exa
@@ -134,6 +137,7 @@ class SettingsUpdate(BaseModel):
     parse_providers_order: Optional[list[str]] = None
     parse_min_text_chars: Optional[int] = Field(default=None, ge=0, le=10000)
     # LLM
+    llm_auto_extract: Optional[bool] = None
     llm_api_key: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
@@ -176,6 +180,7 @@ async def get_settings(
     config = get_runtime_config()
     
     return SettingsResponse(
+        bark_enabled=config.bark_enabled,
         bark_configured=bool(config.bark_device_key),
         bark_server_url=config.bark_server_url,
         exa_configured=bool(config.exa_api_key),
@@ -185,6 +190,7 @@ async def get_settings(
         exa_contents_retries=config.exa_contents_retries,
         parse_providers_order=config.parse_providers_order,
         parse_min_text_chars=config.parse_min_text_chars,
+        llm_auto_extract=config.llm_auto_extract,
         llm_configured=bool(config.llm_api_key),
         llm_base_url=config.llm_base_url,
         llm_model=config.llm_model,
@@ -216,6 +222,8 @@ async def update_settings(
     updates = {}
     schedule_changed = False
     
+    if data.bark_enabled is not None:
+        updates["bark_enabled"] = data.bark_enabled
     if data.bark_device_key is not None:
         # Empty string means "clear the key"
         updates["bark_device_key"] = data.bark_device_key if data.bark_device_key else None
@@ -243,6 +251,8 @@ async def update_settings(
         updates["parse_providers_order"] = data.parse_providers_order
     if data.parse_min_text_chars is not None:
         updates["parse_min_text_chars"] = data.parse_min_text_chars
+    if data.llm_auto_extract is not None:
+        updates["llm_auto_extract"] = data.llm_auto_extract
     if data.llm_api_key is not None:
         updates["llm_api_key"] = data.llm_api_key if data.llm_api_key else None
     if data.llm_base_url is not None:
@@ -768,6 +778,12 @@ async def test_push(
 ):
     """Test Bark push notification. Requires login."""
     config = get_runtime_config()
+    
+    if not config.bark_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Bark push notifications are disabled. Enable them in Settings.",
+        )
     
     if not config.bark_device_key:
         raise HTTPException(
@@ -1726,6 +1742,7 @@ async def get_status(
     return {
         "subscriptions": sub_count or 0,
         "entries": entry_count or 0,
+        "bark_enabled": config.bark_enabled,
         "bark_configured": bool(config.bark_device_key),
         "exa_configured": bool(config.exa_api_key),
         "parse_enabled": is_parse_enabled(),

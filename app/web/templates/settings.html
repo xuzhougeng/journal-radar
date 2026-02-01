@@ -12,6 +12,13 @@
     <h2>Bark Push Notification</h2>
     <form id="bark-form" onsubmit="saveSettings(event, 'bark')">
         <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="bark_enabled" name="bark_enabled" {% if settings.bark_enabled %}checked{% endif %}>
+                Enable Bark Push Notifications
+            </label>
+            <span class="hint">When disabled, no push notifications will be sent even if device key is configured.</span>
+        </div>
+        <div class="form-group">
             <label for="bark_device_key">Device Key</label>
             <input type="text" id="bark_device_key" name="bark_device_key" 
                    placeholder="{% if bark_configured %}(configured - enter new value to change){% else %}Enter your Bark device key{% endif %}">
@@ -24,7 +31,7 @@
         </div>
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">Save Bark Settings</button>
-            {% if bark_configured %}
+            {% if bark_configured and settings.bark_enabled %}
             <button type="button" class="btn" onclick="testPush()">Send Test Notification</button>
             {% endif %}
         </div>
@@ -97,6 +104,13 @@
 <div class="card">
     <h2>LLM Structured Extraction</h2>
     <form id="llm-form" onsubmit="saveSettings(event, 'llm')">
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="llm_auto_extract" name="llm_auto_extract" {% if settings.llm_auto_extract %}checked{% endif %}>
+                Auto-extract on new entries
+            </label>
+            <span class="hint">When enabled, automatically run LLM extraction on new entries during check runs. Manual extraction is always available.</span>
+        </div>
         <div class="form-group">
             <label for="llm_api_key">API Key</label>
             <input type="text" id="llm_api_key" name="llm_api_key"
@@ -296,6 +310,7 @@ async function saveSettings(event, section) {
     
     // Collect form data based on section
     if (section === 'bark') {
+        data.bark_enabled = form.bark_enabled.checked;
         const deviceKey = form.bark_device_key.value.trim();
         if (deviceKey) data.bark_device_key = deviceKey;
         data.bark_server_url = form.bark_server_url.value.trim();
@@ -310,6 +325,7 @@ async function saveSettings(event, section) {
         const providerOrder = form.parse_providers_order.value;
         data.parse_providers_order = providerOrder.split(',');
     } else if (section === 'llm') {
+        data.llm_auto_extract = form.llm_auto_extract.checked;
         const apiKey = form.llm_api_key.value.trim();
         if (apiKey) data.llm_api_key = apiKey;
         data.llm_base_url = form.llm_base_url.value.trim();

@@ -58,7 +58,9 @@
         <div class="actions">
             <a href="/subscriptions" class="btn">Manage Subscriptions</a>
             <a href="/entries" class="btn">View Entries</a>
+            {% if settings.bark_enabled and bark_configured %}
             <button class="btn" onclick="testPush()">Test Push Notification</button>
+            {% endif %}
         </div>
     </div>
 </div>

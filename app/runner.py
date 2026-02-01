@@ -364,7 +364,8 @@ async def run_check() -> dict[str, Any]:
                                     
                                     # Auto-trigger LLM structured extraction (if enabled)
                                     from app.llm_struct import is_llm_enabled
-                                    if is_llm_enabled():
+                                    llm_config = get_runtime_config()
+                                    if is_llm_enabled() and llm_config.llm_auto_extract:
                                         try:
                                             llm_count = await fetch_llm_structure_for_entries(
                                                 session, content_entry_ids
@@ -378,6 +379,10 @@ async def run_check() -> dict[str, Any]:
                                             logger.error(
                                                 f"LLM extraction failed for '{subscription.name}': {llm_err}"
                                             )
+                                    elif is_llm_enabled() and not llm_config.llm_auto_extract:
+                                        logger.debug(
+                                            f"LLM auto-extraction disabled, skipping for '{subscription.name}'"
+                                        )
                             except Exception as parse_err:
                                 # Log but don't fail the whole run
                                 logger.error(
@@ -390,36 +395,42 @@ async def run_check() -> dict[str, Any]:
                     errors.append(error_msg)
 
             # Send a single digest notification for all new entries
+            config = get_runtime_config()
             if subscription_new_entries:
-                try:
-                    # Build journal_counts: name -> count
-                    journal_counts: dict[str, int] = {}
+                if not config.bark_enabled:
+                    logger.info("Bark push notifications are disabled, skipping digest notification")
+                elif not config.bark_device_key:
+                    logger.info("Bark device key not configured, skipping digest notification")
+                else:
+                    try:
+                        # Build journal_counts: name -> count
+                        journal_counts: dict[str, int] = {}
 
-                    for sub_id, new_entries in subscription_new_entries.items():
-                        sub_result = await session.execute(
-                            select(Subscription).where(Subscription.id == sub_id)
-                        )
-                        subscription = sub_result.scalar_one()
-                        journal_counts[subscription.name] = len(new_entries)
-
-                    # Send one digest notification
-                    sent = await notifier.notify_digest(journal_counts, check_run.id)
-                    total_notifications = sent
-
-                    # Mark all entries as notified
-                    for sub_id, new_entries in subscription_new_entries.items():
-                        for entry in new_entries:
-                            await session.execute(
-                                Entry.__table__.update()
-                                .where(Entry.fingerprint == entry.fingerprint)
-                                .where(Entry.subscription_id == sub_id)
-                                .values(notified=True)
+                        for sub_id, new_entries in subscription_new_entries.items():
+                            sub_result = await session.execute(
+                                select(Subscription).where(Subscription.id == sub_id)
                             )
-                    await session.commit()
+                            subscription = sub_result.scalar_one()
+                            journal_counts[subscription.name] = len(new_entries)
 
-                except Exception as e:
-                    logger.error(f"Error sending digest notification: {e}")
-                    errors.append(str(e))
+                        # Send one digest notification
+                        sent = await notifier.notify_digest(journal_counts, check_run.id)
+                        total_notifications = sent
+
+                        # Mark all entries as notified
+                        for sub_id, new_entries in subscription_new_entries.items():
+                            for entry in new_entries:
+                                await session.execute(
+                                    Entry.__table__.update()
+                                    .where(Entry.fingerprint == entry.fingerprint)
+                                    .where(Entry.subscription_id == sub_id)
+                                    .values(notified=True)
+                                )
+                        await session.commit()
+
+                    except Exception as e:
+                        logger.error(f"Error sending digest notification: {e}")
+                        errors.append(str(e))
 
             # Update check run record
             check_run.completed_at = datetime.utcnow()

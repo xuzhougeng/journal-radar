@@ -57,6 +57,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "request": request,
             "settings": config,
+            "bark_configured": bool(config.bark_device_key),
             "subscription_count": sub_count or 0,
             "entry_count": entry_count or 0,
             "last_run": last_run,

@@ -42,6 +42,11 @@ class BarkNotifier:
         Returns:
             True if sent successfully, False otherwise
         """
+        config = get_runtime_config()
+        if not config.bark_enabled:
+            logger.debug("Bark push notifications are disabled, skipping")
+            return False
+
         if not self.device_key:
             logger.warning("Bark device key not configured, skipping notification")
             return False
@@ -93,6 +98,11 @@ class BarkNotifier:
             1 if notification sent successfully, 0 otherwise
         """
         if not journal_counts:
+            return 0
+
+        config = get_runtime_config()
+        if not config.bark_enabled:
+            logger.debug("Bark push notifications are disabled, skipping digest notification")
             return 0
 
         if not self.device_key:
@@ -166,6 +176,11 @@ class BarkNotifier:
             Number of notifications sent
         """
         if not entries:
+            return 0
+
+        config = get_runtime_config()
+        if not config.bark_enabled:
+            logger.debug("Bark push notifications are disabled, skipping notifications")
             return 0
 
         if not self.device_key:

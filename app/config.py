@@ -17,6 +17,10 @@ class RuntimeConfig(BaseModel):
     """
 
     # Bark Push Notification
+    bark_enabled: bool = Field(
+        default=True,
+        description="Enable Bark push notifications (can be disabled without clearing device key)",
+    )
     bark_device_key: Optional[str] = Field(
         default=None,
         description="Bark device key for push notifications",
@@ -104,6 +108,10 @@ class RuntimeConfig(BaseModel):
     )
 
     # LLM structured extraction (OpenAI-compatible API)
+    llm_auto_extract: bool = Field(
+        default=True,
+        description="Automatically run LLM extraction on new entries during check runs",
+    )
     llm_api_key: Optional[str] = Field(
         default=None,
         description="API key for OpenAI-compatible LLM service",
@@ -271,6 +279,10 @@ class _LegacySettingsShim:
         return StaticConfig.DATABASE_URL
 
     @property
+    def bark_enabled(self) -> bool:
+        return get_runtime_config().bark_enabled
+
+    @property
     def bark_device_key(self) -> Optional[str]:
         return get_runtime_config().bark_device_key
 
@@ -321,6 +333,10 @@ class _LegacySettingsShim:
     @property
     def parse_min_text_chars(self) -> int:
         return get_runtime_config().parse_min_text_chars
+
+    @property
+    def llm_auto_extract(self) -> bool:
+        return get_runtime_config().llm_auto_extract
 
     @property
     def llm_api_key(self) -> Optional[str]:
